@@ -1,14 +1,19 @@
 use nom::{
-  IResult, Parser, branch::alt, bytes::complete::{tag, take, take_until}, combinator::map_res, multi::{many_till, many0}, sequence::{Tuple, delimited, terminated}
+    IResult, Parser,
+    branch::alt,
+    bytes::complete::{tag, take, take_until},
+    combinator::map_res,
+    multi::{many_till, many0},
+    sequence::{Tuple, delimited, terminated},
 };
 
 use nom::character::complete::{i32, u32};
 
-// If the parser was successful, then it will return a tuple. 
-// The first field of the tuple will contain everything the parser did not process. 
+// If the parser was successful, then it will return a tuple.
+// The first field of the tuple will contain everything the parser did not process.
 // The second will contain everything the parser processed.
 #[derive(Eq, PartialEq, Debug)]
-pub struct ByteString<'a>{
+pub struct ByteString<'a> {
     elements: &'a str,
 }
 
@@ -17,19 +22,13 @@ pub enum Bencode<'a> {
     Int(i32),
     ByteString(ByteString<'a>),
     List(Vec<Bencode<'a>>),
-    Dictionary(Vec<(ByteString<'a>, Bencode<'a>)>)
+    Dictionary(Vec<(ByteString<'a>, Bencode<'a>)>),
 }
 
 // https://en.wikipedia.org/wiki/Bencode
 
-
-
 fn parse_int(i: &str) -> IResult<&str, Bencode> {
-    let (leftover, number) = delimited(
-        tag("i"),
-        i32,
-        tag("e")
-    ).parse(i)?;
+    let (leftover, number) = delimited(tag("i"), i32, tag("e")).parse(i)?;
 
     Ok((leftover, Bencode::Int(number)))
 }
@@ -49,8 +48,7 @@ fn parse_bytestring(i: &str) -> IResult<&str, Bencode> {
 fn parse_list(i: &str) -> IResult<&str, Bencode> {
     let (leftover, _) = tag("l").parse(i)?;
 
-    let (leftover, (eles, _)) = many_till(parse_type, tag("e"))
-        .parse(leftover)?;
+    let (leftover, (eles, _)) = many_till(parse_type, tag("e")).parse(leftover)?;
 
     Ok((leftover, Bencode::List(eles)))
 }
@@ -64,21 +62,19 @@ fn parse_pair(i: &str) -> IResult<&str, (ByteString, Bencode)> {
 fn parse_dictionary(i: &str) -> IResult<&str, Bencode> {
     let (leftover, _) = tag("d").parse(i)?;
 
-
-    let (leftover, (eles, _)) = many_till(parse_pair, tag("e"))
-        .parse(leftover)?;
+    let (leftover, (eles, _)) = many_till(parse_pair, tag("e")).parse(leftover)?;
 
     Ok((leftover, Bencode::Dictionary(eles)))
 }
 
-
 fn parse_type(i: &str) -> IResult<&str, Bencode> {
     let (leftover, res) = alt((
-        parse_int, // int
-        parse_list, // list 
+        parse_int,  // int
+        parse_list, // list
         parse_dictionary,
-        parse_bytestring // dictionary
-    )).parse(i)?;
+        parse_bytestring, // dictionary
+    ))
+    .parse(i)?;
     Ok((leftover, res))
 }
 
@@ -149,11 +145,15 @@ mod test {
 
     #[test]
     fn test_list() {
-        do_list_test("l7:bencodei-20ee", 
-        vec![
-            Bencode::ByteString(ByteString { elements: "bencode" }),
-            Bencode::Int(-20),
-        ]);
+        do_list_test(
+            "l7:bencodei-20ee",
+            vec![
+                Bencode::ByteString(ByteString {
+                    elements: "bencode",
+                }),
+                Bencode::Int(-20),
+            ],
+        );
     }
 
     #[test]
@@ -162,9 +162,22 @@ mod test {
     }
     #[test]
     fn test_dict() {
-        do_dict_test("d7:meaningi42e4:wiki7:bencodee", vec![
-            (ByteString{elements: "meaning"}, Bencode::Int(42)),
-            (ByteString{elements: "wiki"}, Bencode::ByteString(ByteString{elements: "bencode"}))
-        ]);
+        do_dict_test(
+            "d7:meaningi42e4:wiki7:bencodee",
+            vec![
+                (
+                    ByteString {
+                        elements: "meaning",
+                    },
+                    Bencode::Int(42),
+                ),
+                (
+                    ByteString { elements: "wiki" },
+                    Bencode::ByteString(ByteString {
+                        elements: "bencode",
+                    }),
+                ),
+            ],
+        );
     }
 }
