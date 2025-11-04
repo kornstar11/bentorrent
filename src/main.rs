@@ -7,8 +7,11 @@ fn main() {
         Ok((_, parsed)) => {
             println!("{:#?}", parsed);
         },
-        Err(nom::Err::Error(e)) => {
-            eprintln!("Error: {:?}", e);
+        Err(nom::Err::Incomplete(e)) => {
+            eprintln!("Missing: {:?}", e);
+        }
+        Err(nom::Err::Error(nom::error::Error{input, code})) => {
+            eprintln!("Code: {:?} Error: {:?}", code, String::from_utf8_lossy(input).to_string());
         }
         Err(nom::Err::Failure(e)) => {
             eprintln!("Fail: {:?}", e);

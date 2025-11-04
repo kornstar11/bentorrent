@@ -1,27 +1,34 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Debug};
 
 use nom::{
-    IResult, Parser,
-    branch::alt,
-    bytes::complete::{tag, take, take_until},
-    combinator::map_res,
-    multi::{many_till, many0},
-    sequence::{Tuple, delimited, terminated},
+    HexDisplay, IResult, Parser, branch::alt, bytes::complete::{tag, take, take_until}, combinator::map_res, multi::{many_till, many0}, sequence::{Tuple, delimited, terminated}
 };
 
-use nom::character::complete::{i32, u32};
+use std::fmt;
+
+use nom::character::complete::{i32, u32, i64};
 
 // If the parser was successful, then it will return a tuple.
 // The first field of the tuple will contain everything the parser did not process.
 // The second will contain everything the parser processed.
-#[derive(Eq, PartialEq, Hash, Debug)]
+#[derive(Eq, PartialEq, Hash)]
 pub struct ByteString<'a> {
     elements: &'a [u8],
 }
 
+impl<'a> Debug for ByteString<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let strs = String::from_utf8_lossy(&self.elements).to_string();
+        f.debug_struct("ByteString")
+            .field("elements", &strs)
+            .finish()
+    }
+    
+}
+
 #[derive(Eq, PartialEq, Debug)]
 pub enum Bencode<'a> {
-    Int(i32),
+    Int(i64),
     ByteString(ByteString<'a>),
     List(Vec<Bencode<'a>>),
     Dictionary(HashMap<ByteString<'a>, Bencode<'a>>),
@@ -30,7 +37,7 @@ pub enum Bencode<'a> {
 // https://en.wikipedia.org/wiki/Bencode
 
 fn parse_int(i: &[u8]) -> IResult<&[u8], Bencode<'_>> {
-    let (leftover, number) = delimited(tag("i"), i32, tag("e")).parse(i)?;
+    let (leftover, number) = delimited(tag("i"), i64, tag("e")).parse(i)?;
 
     Ok((leftover, Bencode::Int(number)))
 }
