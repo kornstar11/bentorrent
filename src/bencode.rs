@@ -16,7 +16,7 @@ use nom::character::complete::{i32, u32};
 // The second will contain everything the parser processed.
 #[derive(Eq, PartialEq, Hash, Debug)]
 pub struct ByteString<'a> {
-    elements: &'a str,
+    elements: &'a [u8],
 }
 
 #[derive(Eq, PartialEq, Debug)]
@@ -29,25 +29,25 @@ pub enum Bencode<'a> {
 
 // https://en.wikipedia.org/wiki/Bencode
 
-fn parse_int(i: &str) -> IResult<&str, Bencode<'_>> {
+fn parse_int(i: &[u8]) -> IResult<&[u8], Bencode<'_>> {
     let (leftover, number) = delimited(tag("i"), i32, tag("e")).parse(i)?;
 
     Ok((leftover, Bencode::Int(number)))
 }
 
-fn inner_parse_bytestring(i: &str) -> IResult<&str, ByteString<'_>> {
+fn inner_parse_bytestring(i: &[u8]) -> IResult<&[u8], ByteString<'_>> {
     let (leftover, len) = u32.parse(i)?;
     let (leftover, _) = tag(":").parse(leftover)?;
     let (leftover, bs) = take(len).parse(leftover)?;
     Ok((leftover, ByteString { elements: bs }))
 }
 
-fn parse_bytestring(i: &str) -> IResult<&str, Bencode<'_>> {
+fn parse_bytestring(i: &[u8]) -> IResult<&[u8], Bencode<'_>> {
     let (leftover, bs) = inner_parse_bytestring(i)?;
     Ok((leftover, Bencode::ByteString(bs)))
 }
 
-fn parse_list(i: &str) -> IResult<&str, Bencode<'_>> {
+fn parse_list(i: &[u8]) -> IResult<&[u8], Bencode<'_>> {
     let (leftover, _) = tag("l").parse(i)?;
 
     let (leftover, (eles, _)) = many_till(parse_type, tag("e")).parse(leftover)?;
@@ -55,13 +55,13 @@ fn parse_list(i: &str) -> IResult<&str, Bencode<'_>> {
     Ok((leftover, Bencode::List(eles)))
 }
 
-fn parse_pair(i: &str) -> IResult<&str, (ByteString<'_>, Bencode<'_>)> {
+fn parse_pair(i: &[u8]) -> IResult<&[u8], (ByteString<'_>, Bencode<'_>)> {
     let (leftover, k) = inner_parse_bytestring(i)?;
     let (leftover, v) = parse_type(leftover)?;
     Ok((leftover, (k, v)))
 }
 
-fn parse_dictionary(i: &str) -> IResult<&str, Bencode<'_>> {
+fn parse_dictionary(i: &[u8]) -> IResult<&[u8], Bencode<'_>> {
     let (leftover, _) = tag("d").parse(i)?;
 
     let (leftover, (eles, _)) = many_till(parse_pair, tag("e")).parse(leftover)?;
@@ -73,7 +73,7 @@ fn parse_dictionary(i: &str) -> IResult<&str, Bencode<'_>> {
     Ok((leftover, Bencode::Dictionary(eles)))
 }
 
-fn parse_type(i: &str) -> IResult<&str, Bencode<'_>> {
+fn parse_type(i: &[u8]) -> IResult<&[u8], Bencode<'_>> {
     let (leftover, res) = alt((
         parse_int,  // int
         parse_list, // list
@@ -84,7 +84,7 @@ fn parse_type(i: &str) -> IResult<&str, Bencode<'_>> {
     Ok((leftover, res))
 }
 
-pub fn parse_bencode(i: &str) -> IResult<&str, Bencode<'_>> {
+pub fn parse_bencode(i: &[u8]) -> IResult<&[u8], Bencode<'_>> {
     return parse_type(i);
 }
 
@@ -93,19 +93,19 @@ mod test {
     use super::*;
 
     fn do_int_tests(i: &str, v: i32) {
-        let (leftover, zero) = parse_int(i).unwrap();
+        let (leftover, zero) = parse_int(i.as_bytes()).unwrap();
         assert_eq!(zero, Bencode::Int(v));
         assert_eq!(leftover.len(), 0)
     }
 
     fn do_bytestring_test(i: &str, val: &str) {
-        let (leftover, v) = parse_bytestring(i).unwrap();
-        assert_eq!(v, Bencode::ByteString(ByteString { elements: val }));
+        let (leftover, v) = parse_bytestring(i.as_bytes()).unwrap();
+        assert_eq!(v, Bencode::ByteString(ByteString { elements: val.as_bytes() }));
         assert_eq!(leftover.len(), 0);
     }
 
     fn do_list_test(i: &str, vals: Vec<Bencode>) {
-        let (leftover, v) = parse_list(i).unwrap();
+        let (leftover, v) = parse_list(i.as_bytes()).unwrap();
         if let Bencode::List(extracted) = v {
             assert_eq!(vals, extracted)
         } else {
@@ -115,7 +115,7 @@ mod test {
     }
 
     fn do_dict_test(i: &str, vals: Vec<(ByteString, Bencode)>) {
-        let (leftover, v) = parse_dictionary(i).unwrap();
+        let (leftover, v) = parse_dictionary(i.as_bytes()).unwrap();
         if let Bencode::Dictionary(extracted) = v {
             assert_eq!(vals.len(), extracted.len());
             for (k, v) in vals.iter() {
@@ -162,7 +162,7 @@ mod test {
             "l7:bencodei-20ee",
             vec![
                 Bencode::ByteString(ByteString {
-                    elements: "bencode",
+                    elements: "bencode".as_bytes(),
                 }),
                 Bencode::Int(-20),
             ],
@@ -180,14 +180,14 @@ mod test {
             vec![
                 (
                     ByteString {
-                        elements: "meaning",
+                        elements: "meaning".as_bytes(),
                     },
                     Bencode::Int(42),
                 ),
                 (
-                    ByteString { elements: "wiki" },
+                    ByteString { elements: "wiki".as_bytes() },
                     Bencode::ByteString(ByteString {
-                        elements: "bencode",
+                        elements: "bencode".as_bytes(),
                     }),
                 ),
             ],
