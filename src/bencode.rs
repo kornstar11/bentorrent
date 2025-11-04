@@ -57,12 +57,13 @@ fn parse_list(i: &str) -> IResult<&str, Bencode> {
 
 fn parse_pair(i: &str) -> IResult<&str, (ByteString, Bencode)> {
     let (leftover, k) = inner_parse_bytestring(i)?;
-    let (leftover, v) = parse_type(i)?;
+    let (leftover, v) = parse_type(leftover)?;
     Ok((leftover, (k, v)))
 }
 
 fn parse_dictionary(i: &str) -> IResult<&str, Bencode> {
     let (leftover, _) = tag("d").parse(i)?;
+
 
     let (leftover, (eles, _)) = many_till(parse_pair, tag("e"))
         .parse(leftover)?;
@@ -163,7 +164,6 @@ mod test {
     fn test_dict() {
         do_dict_test("d7:meaningi42e4:wiki7:bencodee", vec![
             (ByteString{elements: "meaning"}, Bencode::Int(42)),
-
             (ByteString{elements: "wiki"}, Bencode::ByteString(ByteString{elements: "bencode"}))
         ]);
     }
