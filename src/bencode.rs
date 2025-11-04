@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use nom::{
     IResult, Parser,
     branch::alt,
@@ -12,7 +14,7 @@ use nom::character::complete::{i32, u32};
 // If the parser was successful, then it will return a tuple.
 // The first field of the tuple will contain everything the parser did not process.
 // The second will contain everything the parser processed.
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Hash, Debug)]
 pub struct ByteString<'a> {
     elements: &'a str,
 }
@@ -22,30 +24,30 @@ pub enum Bencode<'a> {
     Int(i32),
     ByteString(ByteString<'a>),
     List(Vec<Bencode<'a>>),
-    Dictionary(Vec<(ByteString<'a>, Bencode<'a>)>),
+    Dictionary(HashMap<ByteString<'a>, Bencode<'a>>),
 }
 
 // https://en.wikipedia.org/wiki/Bencode
 
-fn parse_int(i: &str) -> IResult<&str, Bencode> {
+fn parse_int(i: &str) -> IResult<&str, Bencode<'_>> {
     let (leftover, number) = delimited(tag("i"), i32, tag("e")).parse(i)?;
 
     Ok((leftover, Bencode::Int(number)))
 }
 
-fn inner_parse_bytestring(i: &str) -> IResult<&str, ByteString> {
+fn inner_parse_bytestring(i: &str) -> IResult<&str, ByteString<'_>> {
     let (leftover, len) = u32.parse(i)?;
     let (leftover, _) = tag(":").parse(leftover)?;
     let (leftover, bs) = take(len).parse(leftover)?;
     Ok((leftover, ByteString { elements: bs }))
 }
 
-fn parse_bytestring(i: &str) -> IResult<&str, Bencode> {
+fn parse_bytestring(i: &str) -> IResult<&str, Bencode<'_>> {
     let (leftover, bs) = inner_parse_bytestring(i)?;
     Ok((leftover, Bencode::ByteString(bs)))
 }
 
-fn parse_list(i: &str) -> IResult<&str, Bencode> {
+fn parse_list(i: &str) -> IResult<&str, Bencode<'_>> {
     let (leftover, _) = tag("l").parse(i)?;
 
     let (leftover, (eles, _)) = many_till(parse_type, tag("e")).parse(leftover)?;
@@ -53,21 +55,25 @@ fn parse_list(i: &str) -> IResult<&str, Bencode> {
     Ok((leftover, Bencode::List(eles)))
 }
 
-fn parse_pair(i: &str) -> IResult<&str, (ByteString, Bencode)> {
+fn parse_pair(i: &str) -> IResult<&str, (ByteString<'_>, Bencode<'_>)> {
     let (leftover, k) = inner_parse_bytestring(i)?;
     let (leftover, v) = parse_type(leftover)?;
     Ok((leftover, (k, v)))
 }
 
-fn parse_dictionary(i: &str) -> IResult<&str, Bencode> {
+fn parse_dictionary(i: &str) -> IResult<&str, Bencode<'_>> {
     let (leftover, _) = tag("d").parse(i)?;
 
     let (leftover, (eles, _)) = many_till(parse_pair, tag("e")).parse(leftover)?;
 
+    let eles = eles
+        .into_iter()
+        .collect::<HashMap<ByteString, Bencode>>();
+
     Ok((leftover, Bencode::Dictionary(eles)))
 }
 
-fn parse_type(i: &str) -> IResult<&str, Bencode> {
+fn parse_type(i: &str) -> IResult<&str, Bencode<'_>> {
     let (leftover, res) = alt((
         parse_int,  // int
         parse_list, // list
@@ -76,6 +82,10 @@ fn parse_type(i: &str) -> IResult<&str, Bencode> {
     ))
     .parse(i)?;
     Ok((leftover, res))
+}
+
+pub fn parse_bencode(i: &str) -> IResult<&str, Bencode<'_>> {
+    return parse_type(i);
 }
 
 #[cfg(test)]
@@ -107,7 +117,10 @@ mod test {
     fn do_dict_test(i: &str, vals: Vec<(ByteString, Bencode)>) {
         let (leftover, v) = parse_dictionary(i).unwrap();
         if let Bencode::Dictionary(extracted) = v {
-            assert_eq!(vals, extracted)
+            assert_eq!(vals.len(), extracted.len());
+            for (k, v) in vals.iter() {
+                assert_eq!(extracted.get(k).unwrap(), v);
+            }
         } else {
             panic!("Wrong type");
         }
