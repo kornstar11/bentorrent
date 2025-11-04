@@ -1,12 +1,12 @@
 use std::{collections::HashMap, fmt::Debug};
 
 use nom::{
-    HexDisplay, IResult, Parser, branch::alt, bytes::complete::{tag, take, take_until}, combinator::map_res, multi::{many_till, many0}, sequence::{Tuple, delimited, terminated}
+    IResult, Parser, branch::alt, bytes::complete::{tag, take}, multi::many_till, sequence::delimited
 };
 
 use std::fmt;
 
-use nom::character::complete::{i32, u32, i64};
+use nom::character::complete::{u32, i64};
 
 // If the parser was successful, then it will return a tuple.
 // The first field of the tuple will contain everything the parser did not process.
@@ -16,9 +16,15 @@ pub struct ByteString<'a> {
     elements: &'a [u8],
 }
 
+impl<'a> ToString for ByteString<'a> {
+    fn to_string(&self) -> String {
+        return String::from_utf8_lossy(self.elements).to_string();
+    }
+}
+
 impl<'a> Debug for ByteString<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let strs = String::from_utf8_lossy(&self.elements).to_string();
+        let strs = self.to_string();
         f.debug_struct("ByteString")
             .field("elements", &strs)
             .finish()
@@ -99,7 +105,7 @@ pub fn parse_bencode(i: &[u8]) -> IResult<&[u8], Bencode<'_>> {
 mod test {
     use super::*;
 
-    fn do_int_tests(i: &str, v: i32) {
+    fn do_int_tests(i: &str, v: i64) {
         let (leftover, zero) = parse_int(i.as_bytes()).unwrap();
         assert_eq!(zero, Bencode::Int(v));
         assert_eq!(leftover.len(), 0)
