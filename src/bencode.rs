@@ -107,6 +107,16 @@ mod test {
         assert_eq!(leftover.len(), 0);
     }
 
+    fn do_dict_test(i: &str, vals: Vec<(ByteString, Bencode)>) {
+        let (leftover, v) = parse_dictionary(i).unwrap();
+        if let Bencode::Dictionary(extracted) = v {
+            assert_eq!(vals, extracted)
+        } else {
+            panic!("Wrong type");
+        }
+        assert_eq!(leftover.len(), 0);
+    }
+
     #[test]
     fn test_parse_int_0() {
         do_int_tests("i0e", 0);
@@ -142,6 +152,19 @@ mod test {
         vec![
             Bencode::ByteString(ByteString { elements: "bencode" }),
             Bencode::Int(-20),
+        ]);
+    }
+
+    #[test]
+    fn test_empty_dict() {
+        do_dict_test("de", vec![]);
+    }
+    #[test]
+    fn test_dict() {
+        do_dict_test("d7:meaningi42e4:wiki7:bencodee", vec![
+            (ByteString{elements: "meaning"}, Bencode::Int(42)),
+
+            (ByteString{elements: "wiki"}, Bencode::ByteString(ByteString{elements: "bencode"}))
         ]);
     }
 }
