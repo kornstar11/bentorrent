@@ -36,6 +36,7 @@ fn parse_int(i: &str) -> IResult<&str, Bencode> {
 
 fn inner_parse_bytestring(i: &str) -> IResult<&str, ByteString> {
     let (leftover, len) = u32.parse(i)?;
+    let (leftover, _) = tag(":").parse(leftover)?;
     let (leftover, bs) = take(len).parse(leftover)?;
     Ok((leftover, ByteString { elements: bs }))
 }
@@ -46,13 +47,12 @@ fn parse_bytestring(i: &str) -> IResult<&str, Bencode> {
 }
 
 fn parse_list(i: &str) -> IResult<&str, Bencode> {
-    let (mut leftover, len) = u32.parse(i)?;
-    let mut acc = vec![];
-    loop {
-        let (leftover, bc) = parse_type(i)?;
-        acc.push(bc);
-    }
-    Ok((leftover, Bencode::List(acc)))
+    let (leftover, _) = tag("l").parse(i)?;
+
+    let (leftover, (eles, _)) = many_till(parse_type, tag("e"))
+        .parse(leftover)?;
+
+    Ok((leftover, Bencode::List(eles)))
 }
 
 fn parse_pair(i: &str) -> IResult<&str, (ByteString, Bencode)> {
@@ -64,8 +64,8 @@ fn parse_pair(i: &str) -> IResult<&str, (ByteString, Bencode)> {
 fn parse_dictionary(i: &str) -> IResult<&str, Bencode> {
     let (leftover, _) = tag("d").parse(i)?;
 
-    let (leftover, (eles, _)) = many_till(parse_pair, tag("d"))
-        .parse(i)?;
+    let (leftover, (eles, _)) = many_till(parse_pair, tag("e"))
+        .parse(leftover)?;
 
     Ok((leftover, Bencode::Dictionary(eles)))
 }
@@ -89,7 +89,22 @@ mod test {
         let (leftover, zero) = parse_int(i).unwrap();
         assert_eq!(zero, Bencode::Int(v));
         assert_eq!(leftover.len(), 0)
+    }
 
+    fn do_bytestring_test(i: &str, val: &str) {
+        let (leftover, v) = parse_bytestring(i).unwrap();
+        assert_eq!(v, Bencode::ByteString(ByteString { elements: val }));
+        assert_eq!(leftover.len(), 0);
+    }
+
+    fn do_list_test(i: &str, vals: Vec<Bencode>) {
+        let (leftover, v) = parse_list(i).unwrap();
+        if let Bencode::List(extracted) = v {
+            assert_eq!(vals, extracted)
+        } else {
+            panic!("Wrong type");
+        }
+        assert_eq!(leftover.len(), 0);
     }
 
     #[test]
@@ -106,8 +121,27 @@ mod test {
     fn test_parse_int_neg_42() {
         do_int_tests("i-42e", -42);
     }
-}
 
-// pub fn parse_bencode<'a>(input: &'a str) -> Bencode<'a> {
-//     todo!()
-// }
+    #[test]
+    fn test_bs_empty() {
+        do_bytestring_test("0:", "");
+    }
+    #[test]
+    fn test_bs_bencode() {
+        do_bytestring_test("7:bencode", "bencode");
+    }
+
+    #[test]
+    fn test_list_empty() {
+        do_list_test("le", vec![]);
+    }
+
+    #[test]
+    fn test_list() {
+        do_list_test("l7:bencodei-20ee", 
+        vec![
+            Bencode::ByteString(ByteString { elements: "bencode" }),
+            Bencode::Int(-20),
+        ]);
+    }
+}
