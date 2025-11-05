@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug};
+use std::{collections::BTreeMap, fmt::Debug};
 
 use nom::{
     IResult, Parser, branch::alt, bytes::complete::{tag, take}, multi::many_till, sequence::delimited
@@ -8,12 +8,12 @@ use std::fmt;
 
 use nom::character::complete::{u32, i64};
 
-type DictT<'a> = HashMap<ByteString<'a>, Bencode<'a>>;
+pub type DictT<'a> = BTreeMap<ByteString<'a>, Bencode<'a>>;
 
 // If the parser was successful, then it will return a tuple.
 // The first field of the tuple will contain everything the parser did not process.
 // The second will contain everything the parser processed.
-#[derive(Clone, Eq, PartialEq, Hash)]
+#[derive(Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct ByteString<'a> {
     pub elements: &'a [u8],
 }
@@ -65,14 +65,14 @@ impl <'a> Bencode<'a> {
         return list_string;
     }
 
-    fn encode_dictionary(d: DictT<'a>) -> Vec<u8> {
+    fn encode_dictionary(d: &DictT<'a>) -> Vec<u8> {
         let mut acc = vec![];
         acc.extend_from_slice("d".as_bytes());
         for (k, v) in d.iter() {
             let mut k = Self::encode_bs(k);
             let mut v = Self::encode(v);
-            acc.append(k);
-            acc.append(v);
+            acc.append(&mut k);
+            acc.append(&mut v);
         }
         acc.extend_from_slice("e".as_bytes());
         return acc;
@@ -85,7 +85,6 @@ impl <'a> Bencode<'a> {
             Bencode::List(l) => Self::encode_list(l),
             Bencode::Dictionary(d) => Self::encode_dictionary(d),
         }
-
     }
     
 }
@@ -131,7 +130,7 @@ fn parse_dictionary(i: &[u8]) -> IResult<&[u8], Bencode<'_>> {
 
     let eles = eles
         .into_iter()
-        .collect::<HashMap<ByteString, Bencode>>();
+        .collect::<BTreeMap<ByteString, Bencode>>();
 
     Ok((leftover, Bencode::Dictionary(eles)))
 }
