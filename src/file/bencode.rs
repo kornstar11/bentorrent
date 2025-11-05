@@ -8,12 +8,14 @@ use std::fmt;
 
 use nom::character::complete::{u32, i64};
 
+type DictT<'a> = HashMap<ByteString<'a>, Bencode<'a>>;
+
 // If the parser was successful, then it will return a tuple.
 // The first field of the tuple will contain everything the parser did not process.
 // The second will contain everything the parser processed.
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Clone, Eq, PartialEq, Hash)]
 pub struct ByteString<'a> {
-    elements: &'a [u8],
+    pub elements: &'a [u8],
 }
 
 impl<'a> ToString for ByteString<'a> {
@@ -29,15 +31,63 @@ impl<'a> Debug for ByteString<'a> {
             .field("elements", &strs)
             .finish()
     }
-    
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Clone, Debug)]
 pub enum Bencode<'a> {
     Int(i64),
     ByteString(ByteString<'a>),
     List(Vec<Bencode<'a>>),
-    Dictionary(HashMap<ByteString<'a>, Bencode<'a>>),
+    Dictionary(DictT<'a>),
+}
+
+impl <'a> Bencode<'a> {
+    fn encode_int(i: i64) -> Vec<u8> {
+        let bencode = format!("i{}e", i);
+        return bencode.as_bytes().to_vec();
+    }
+
+    fn encode_bs(bs: &ByteString<'a>) -> Vec<u8> {
+        let mut bs_string = format!("{}:", bs.elements.len())
+            .as_bytes()
+            .to_vec();
+        bs_string.extend_from_slice(bs.elements);
+        return bs_string;
+    }
+
+    fn encode_list(l: &Vec<Bencode<'a>>) -> Vec<u8> {
+        let mut list_string = format!("l").as_bytes().to_vec();
+        for bencode in l.iter() {
+            let mut inner_bytes = Self::encode(bencode);
+            list_string.append(&mut inner_bytes);
+        }
+        list_string.extend_from_slice("e".as_bytes());
+        return list_string;
+    }
+
+    fn encode_dictionary(d: DictT<'a>) -> Vec<u8> {
+        let mut acc = vec![];
+        acc.extend_from_slice("d".as_bytes());
+        for (k, v) in d.iter() {
+            let mut k = Self::encode_bs(k);
+            let mut v = Self::encode(v);
+            acc.append(k);
+            acc.append(v);
+        }
+        acc.extend_from_slice("e".as_bytes());
+        return acc;
+
+    }
+    pub fn encode(bc: &Bencode<'a>) -> Vec<u8> {
+        match bc {
+            Bencode::Int(i) => Self::encode_int(*i),
+            Bencode::ByteString(bs) => Self::encode_bs(bs),
+            Bencode::List(l) => Self::encode_list(l),
+            Bencode::Dictionary(d) => Self::encode_dictionary(d),
+        }
+
+    }
+    
 }
 
 // https://en.wikipedia.org/wiki/Bencode

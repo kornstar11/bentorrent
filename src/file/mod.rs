@@ -3,7 +3,3 @@ mod torrent;
 mod error;
 
 pub use bencode::{Bencode, parse_bencode};
-
-pub enum Error {
-    
-}
