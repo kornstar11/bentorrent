@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::file::{Bencode, bencode::ByteString, error::Error};
+use crate::file::{Bencode, ByteString, Error};
 use sha1::{Sha1, Digest};
 //https://en.wikipedia.org/wiki/Torrent_file
 
@@ -12,7 +12,7 @@ pub struct V1Piece {
 mod util {
     use std::collections::HashMap;
 
-    use crate::file::{Bencode, bencode::{DictT}};
+    use crate::file::{Bencode, DictT};
 
     pub fn convert_dict_keys<'a>(eles: DictT<'a>) -> HashMap<String, Bencode<'a>> {
         eles.into_iter().map(|(k, v)|{

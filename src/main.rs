@@ -1,6 +1,6 @@
 use std::fs::read;
 
-use bentorrent::{file::V1Torrent, peer::TrackerClient};
+use bentorrent::{model::V1Torrent, peer::TrackerClient};
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let torrent = read("./test_data/ubuntu-25.10-desktop-amd64.iso.torrent").unwrap();

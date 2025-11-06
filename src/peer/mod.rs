@@ -4,7 +4,7 @@ use sha1::Digest;
 use url::Url;
 use reqwest::Client;
 
-use crate::file::{Bencode, V1Torrent, parse_bencode};
+use crate::{file::parse_bencode, model::V1Torrent};
 
 pub struct UploadDownloadState {
     uploaded: Arc<AtomicUsize>,
@@ -50,6 +50,7 @@ impl TrackerClient {
             .unwrap();
         let text = res.bytes().await.unwrap();
         let decoded = parse_bencode(&text).unwrap();
+        println!("{:#?}", decoded);
 
 
     }
