@@ -29,13 +29,19 @@ pub struct V1TorrentInfo {
     pub hash: Vec<u8>,
 }
 
-impl<'a> TryFrom<Bencode<'a>> for V1TorrentInfo {
-    type Error = Error;
-    fn try_from(bc: Bencode<'a>) -> Result<Self, Self::Error> {
+impl V1TorrentInfo {
+    fn info_hash<'a>(bc: &Bencode<'a>) -> Vec<u8> {
         let mut hasher = Sha1::new();
         let info = Bencode::encode(&bc);
         hasher.update(info);
-        let info_hash = hasher.finalize().to_vec();
+        return hasher.finalize().to_vec();
+    }
+}
+
+impl<'a> TryFrom<Bencode<'a>> for V1TorrentInfo {
+    type Error = Error;
+    fn try_from(bc: Bencode<'a>) -> Result<Self, Self::Error> {
+        let info_hash = Self::info_hash(&bc);
 
         if let Bencode::Dictionary(eles) = bc {
             let conv = util::convert_dict_keys(eles);

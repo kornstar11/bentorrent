@@ -152,6 +152,8 @@ pub fn parse_bencode(i: &[u8]) -> IResult<&[u8], Bencode<'_>> {
 
 #[cfg(test)]
 mod test {
+    use std::fs::read;
+
     use super::*;
 
     fn do_int_tests(i: &str, v: i64) {
@@ -254,5 +256,14 @@ mod test {
                 ),
             ],
         );
+    }
+
+    #[test]
+    fn round_trip() {
+        let torrent = read("./test_data/ubuntu-25.10-desktop-amd64.iso.torrent").unwrap();
+        let (rem, bc) = parse_bencode(&torrent).unwrap();
+        assert_eq!(rem.len(), 0);
+        let encoded = Bencode::encode(&bc);
+        assert_eq!(torrent, encoded);
     }
 }
