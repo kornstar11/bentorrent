@@ -1,2 +1,2 @@
 mod torrent;
-pub use torrent::{V1Torrent, V1Piece, V1TorrentInfo};
+pub use torrent::{V1Piece, V1Torrent, V1TorrentInfo};

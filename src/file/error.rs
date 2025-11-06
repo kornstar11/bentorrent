@@ -9,7 +9,7 @@ pub enum Error {
     #[error("Wrong Bencode type")]
     WrongType,
     #[error("BencodeParse: {0}")]
-    BencodeParse(String)
+    BencodeParse(String),
 }
 
 impl Error {
@@ -20,5 +20,4 @@ impl Error {
     pub fn bencode_parse(s: &str) -> Error {
         Self::BencodeParse(s.to_string())
     }
-    
 }

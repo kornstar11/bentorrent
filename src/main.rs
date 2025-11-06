@@ -10,12 +10,9 @@ async fn main() {
             let client = reqwest::Client::new();
             let tracker_client = TrackerClient::new(torrent, client);
             tracker_client.get_announce().await;
-
-        },
+        }
         Err(e) => {
             eprintln!("Missing: {:?}", e);
         }
     }
-
-
 }

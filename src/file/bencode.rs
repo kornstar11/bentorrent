@@ -1,13 +1,17 @@
 use std::{collections::BTreeMap, fmt::Debug};
 
 use nom::{
-    IResult, Parser, branch::alt, bytes::complete::{tag, take}, multi::many_till, sequence::delimited
+    IResult, Parser,
+    branch::alt,
+    bytes::complete::{tag, take},
+    multi::many_till,
+    sequence::delimited,
 };
 
 use std::fmt;
 
-use nom::character::complete::{u32, i64};
 use super::error::Error;
+use nom::character::complete::{i64, u32};
 
 pub type DictT<'a> = BTreeMap<ByteString<'a>, Bencode<'a>>;
 
@@ -42,16 +46,14 @@ pub enum Bencode<'a> {
     Dictionary(DictT<'a>),
 }
 
-impl <'a> Bencode<'a> {
+impl<'a> Bencode<'a> {
     fn encode_int(i: i64) -> Vec<u8> {
         let bencode = format!("i{}e", i);
         return bencode.as_bytes().to_vec();
     }
 
     fn encode_bs(bs: &ByteString<'a>) -> Vec<u8> {
-        let mut bs_string = format!("{}:", bs.elements.len())
-            .as_bytes()
-            .to_vec();
+        let mut bs_string = format!("{}:", bs.elements.len()).as_bytes().to_vec();
         bs_string.extend_from_slice(bs.elements);
         return bs_string;
     }
@@ -77,7 +79,6 @@ impl <'a> Bencode<'a> {
         }
         acc.extend_from_slice("e".as_bytes());
         return acc;
-
     }
     pub fn encode(bc: &Bencode<'a>) -> Vec<u8> {
         match bc {
@@ -87,7 +88,6 @@ impl <'a> Bencode<'a> {
             Bencode::Dictionary(d) => Self::encode_dictionary(d),
         }
     }
-    
 }
 
 // https://en.wikipedia.org/wiki/Bencode
@@ -128,9 +128,7 @@ fn parse_dictionary(i: &[u8]) -> IResult<&[u8], Bencode<'_>> {
 
     let (leftover, (eles, _)) = many_till(parse_pair, tag("e")).parse(leftover)?;
 
-    let eles = eles
-        .into_iter()
-        .collect::<BTreeMap<ByteString, Bencode>>();
+    let eles = eles.into_iter().collect::<BTreeMap<ByteString, Bencode>>();
 
     Ok((leftover, Bencode::Dictionary(eles)))
 }
@@ -167,7 +165,12 @@ mod test {
 
     fn do_bytestring_test(i: &str, val: &str) {
         let (leftover, v) = parse_bytestring(i.as_bytes()).unwrap();
-        assert_eq!(v, Bencode::ByteString(ByteString { elements: val.as_bytes() }));
+        assert_eq!(
+            v,
+            Bencode::ByteString(ByteString {
+                elements: val.as_bytes()
+            })
+        );
         assert_eq!(leftover.len(), 0);
     }
 
@@ -252,7 +255,9 @@ mod test {
                     Bencode::Int(42),
                 ),
                 (
-                    ByteString { elements: "wiki".as_bytes() },
+                    ByteString {
+                        elements: "wiki".as_bytes(),
+                    },
                     Bencode::ByteString(ByteString {
                         elements: "bencode".as_bytes(),
                     }),
@@ -275,6 +280,5 @@ mod test {
         let decoded = hex::decode(annouce).unwrap();
         let bc = parse_bencode(&decoded).unwrap();
         println!("{:#?}", bc);
-
     }
 }

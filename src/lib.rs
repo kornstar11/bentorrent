@@ -1,3 +1,3 @@
 pub mod file;
-pub mod peer;
 pub mod model;
+pub mod peer;
