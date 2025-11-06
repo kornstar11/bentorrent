@@ -7,6 +7,7 @@ use nom::{
 use std::fmt;
 
 use nom::character::complete::{u32, i64};
+use super::error::Error;
 
 pub type DictT<'a> = BTreeMap<ByteString<'a>, Bencode<'a>>;
 
@@ -146,8 +147,11 @@ fn parse_type(i: &[u8]) -> IResult<&[u8], Bencode<'_>> {
     Ok((leftover, res))
 }
 
-pub fn parse_bencode(i: &[u8]) -> IResult<&[u8], Bencode<'_>> {
-    return parse_type(i);
+pub fn parse_bencode(i: &[u8]) -> Result<Bencode<'_>, Error> {
+    match parse_type(i) {
+        Ok((_, bc)) => Ok(bc),
+        Err(err) => Err(Error::bencode_parse(&err.to_string())),
+    }
 }
 
 #[cfg(test)]
@@ -261,9 +265,15 @@ mod test {
     #[test]
     fn round_trip() {
         let torrent = read("./test_data/ubuntu-25.10-desktop-amd64.iso.torrent").unwrap();
-        let (rem, bc) = parse_bencode(&torrent).unwrap();
-        assert_eq!(rem.len(), 0);
+        let bc = parse_bencode(&torrent).unwrap();
         let encoded = Bencode::encode(&bc);
         assert_eq!(torrent, encoded);
+    }
+
+    #[test]
+    fn test_announce() {
+        let annouce = "d8:completei287e10:incompletei13e8:intervali1800e5:peersld2:ip38:2001:67c:233c:51c2:f8d9:c4ff:fec8:a3567:peer id20:-lt0D80-�S�h_�5o�:�4:porti6938eed2:ip22:2001:41d0:1004:20b5::17:peer id20:-TR3000-fvsjn0t8mw094:porti51413eed2:ip14:185.125.190.597:peer id20:T03I--01rmakEtu9.X6.4:porti6884eed2:ip37:2001:8b0:110e:b164:3e24:748:c967:c7657:peer id20:-TR410B-xfwgoywf32914:porti51413eeee";
+        let bc = parse_bencode(&annouce.as_bytes()).unwrap();
+
     }
 }
