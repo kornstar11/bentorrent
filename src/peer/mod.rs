@@ -48,9 +48,9 @@ impl TrackerClient {
             .send()
             .await
             .unwrap();
-        let text = res.text().await.unwrap();
-        let decoded = parse_bencode(text.as_bytes()).unwrap();
-        println!("{:#?}", decoded);
+        let text = res.bytes().await.unwrap();
+        let decoded = parse_bencode(&text).unwrap();
+
 
     }
 
