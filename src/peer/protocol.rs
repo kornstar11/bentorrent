@@ -86,6 +86,20 @@ pub enum FlagMessages {
     NotInterested = 3,
 }
 
+impl TryFrom<u8> for FlagMessages {
+    type Error = ProtocolError;
+
+    fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(FlagMessages::Choke),
+            1 => Ok(FlagMessages::Unchoke),
+            2 => Ok(FlagMessages::Interested),
+            3 => Ok(FlagMessages::NotInterested),
+            _ => Err(ProtocolError::BadId),
+        }
+    }
+}
+
 pub enum Messages {
     KeepAlive,
     Flag(FlagMessages),
@@ -138,7 +152,30 @@ impl Encode for Messages {
                 i.put_u32(*length);
             },
         }
+    }
+}
 
+impl Decode for Messages {
+    type T = Self;
+    
+    fn decode<T: Buf>(b: &mut T) -> Result<Self::T> {
+        let len = b.try_get_u32()? as usize;
+        if len == 0 {
+            return Ok(Self::KeepAlive);
+        }
+
+        let id = b.try_get_u8()?;
+
+        match id {
+            4 => Ok(Self::Have { piece_index: b.try_get_u32()?}),
+            5 => {
+                let mut bitfield = vec![0 as u8; len - 1];
+                b.try_copy_to_slice(&mut bitfield)?;
+                Ok(Self::BitField { bitfield: bitfield })
+            }
+            i if len == 1 => Ok(Self::Flag(FlagMessages::try_from(i)?)),
+            _ => Err(ProtocolError::BadId) 
+        }
     }
 }
 
