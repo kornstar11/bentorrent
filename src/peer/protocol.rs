@@ -1,12 +1,27 @@
 //https://wiki.theory.org/BitTorrentSpecification#Tracker_HTTP.2FHTTPS_Protocol
 
 use crate::model::PeerContext;
-use anyhow::Result;
-use bytes::{BytesMut, BufMut, Buf};
+use bytes::{Buf, BufMut, BytesMut, TryGetError};
 use nom::AsBytes;
+use thiserror::Error;
 
 const HANDSHAKE_PROTOCOL_ID: &[u8] = "BitTorrent protocol".as_bytes();
 
+type Result<T> = std::result::Result<T, ProtocolError>;
+
+#[derive(Error, Debug)]
+enum ProtocolError {
+    #[error("try get error")]
+    TryGetError(#[from] TryGetError),
+    #[error("Bad id")]
+    BadId,
+    #[error("OtherMessage")]
+    OtherMessage
+}
+
+
+///
+/// Simple traits for encode/decode
 trait Encode {
     fn encode<B: BufMut>(&self, i: &mut B);
 }
@@ -17,6 +32,7 @@ trait Decode {
     
 }
 
+/// Handshake packet
 // handshake: <pstrlen><pstr><reserved><info_hash><peer_id>
 // pstrlen: string length of <pstr>, as a single raw byte
 // pstr: string identifier of the protocol
@@ -59,6 +75,97 @@ impl Decode for Handshake {
         )
     }
 }
+
+///
+/// Simple flag based messages
+#[derive(Copy, Clone)]
+pub enum FlagMessages {
+    Choke = 0,
+    Unchoke = 1,
+    Interested = 2,
+    NotInterested = 3,
+}
+
+pub enum Messages {
+    KeepAlive,
+    Flag(FlagMessages),
+    Have{piece_index: u32},
+    BitField{bitfield: Vec<u8>},
+    Request{index: u32, begin: u32, length: u32},
+    Piece{index: u32, begin: u32, block: Vec<u8>},
+    Cancel{index: u32, begin: u32, length: u32},
+}
+
+impl Encode for Messages {
+    fn encode<B: BufMut>(&self, i: &mut B) {
+        match self {
+            Self::KeepAlive => {
+                i.put_u32(0);
+            },
+            Self::Flag(flag) => {
+                i.put_u32(1);
+                i.put_u8((*flag) as u8);
+            },
+            Self::Have{piece_index} => {
+                i.put_u32(5);
+                i.put_u8(4);
+                i.put_u32(*piece_index);
+            },
+            Self::BitField { bitfield } => {
+                i.put_u32(1 + bitfield.len() as u32);
+                i.put_u8(5);
+                i.put_slice(&bitfield);
+            },
+            Self::Request { index, begin, length } => {
+                i.put_u32(13);
+                i.put_u8(6);
+                i.put_u32(*index);
+                i.put_u32(*begin);
+                i.put_u32(*length);
+            },
+            Self::Piece { index, begin, block } => {
+                i.put_u32(9 + block.len() as u32);
+                i.put_u8(7);
+                i.put_u32(*index);
+                i.put_u32(*begin);
+                i.put_slice(&block);
+            },
+            Self::Cancel { index, begin, length } => {
+                i.put_u32(13);
+                i.put_u8(8);
+                i.put_u32(*index);
+                i.put_u32(*begin);
+                i.put_u32(*length);
+            },
+        }
+
+    }
+}
+
+// impl Decode for FlagMessages {
+//     type T = Self;
+
+//     fn decode<T: Buf>(b: &mut T) -> Result<Self::T> {
+//         let len = b.try_get_u32()?;
+//         if len == 0 {
+//             Ok(Self::KeepAlive)
+//         } else if len == 1 {
+//             let id = b.try_get_u8()?;
+//             match id {
+//                 0 => Ok(Self::Choke),
+//                 1 => Ok(Self::Unchoke),
+//                 2 => Ok(Self::Interested),
+//                 3 => Ok(Self::NotInterested),
+//                 _ => Err(ProtocolError::BadId)
+//             }
+//         } else {
+//             Err(ProtocolError::OtherMessage)
+//         }
+//     }
+// }
+
+
+
 
 #[cfg(test)]
 mod test {
