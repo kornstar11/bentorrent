@@ -16,9 +16,8 @@ pub enum ProtocolError {
     #[error("Bad id")]
     BadId,
     #[error("OtherMessage")]
-    OtherMessage
+    OtherMessage,
 }
-
 
 ///
 /// Simple traits for encode/decode
@@ -29,7 +28,6 @@ trait Encode {
 trait Decode {
     type T;
     fn decode<T: Buf>(b: &mut T) -> Result<Self::T>;
-    
 }
 
 /// Handshake packet
@@ -48,7 +46,7 @@ impl Encode for Handshake {
         i.put_u8(HANDSHAKE_PROTOCOL_ID.len() as u8);
         i.put(HANDSHAKE_PROTOCOL_ID);
         i.put_u64(0);
-        
+
         i.put(self.peer_ctx.info_hash.as_slice());
         i.put(self.peer_ctx.peer_id.as_slice())
     }
@@ -65,15 +63,13 @@ impl Decode for Handshake {
 
         let mut info_hash = vec![0 as u8; 20];
         b.try_copy_to_slice(&mut info_hash)?;
-        
+
         let mut peer_id = vec![0 as u8; 20];
         b.try_copy_to_slice(&mut peer_id)?;
 
-        Ok(
-            Handshake { 
-                peer_ctx: PeerContext { info_hash, peer_id }
-            }
-        )
+        Ok(Handshake {
+            peer_ctx: PeerContext { info_hash, peer_id },
+        })
     }
 }
 
@@ -104,11 +100,27 @@ impl TryFrom<u8> for FlagMessages {
 pub enum Messages {
     KeepAlive,
     Flag(FlagMessages),
-    Have{piece_index: u32},
-    BitField{bitfield: Vec<u8>},
-    Request{index: u32, begin: u32, length: u32},
-    Piece{index: u32, begin: u32, block: Vec<u8>},
-    Cancel{index: u32, begin: u32, length: u32},
+    Have {
+        piece_index: u32,
+    },
+    BitField {
+        bitfield: Vec<u8>,
+    },
+    Request {
+        index: u32,
+        begin: u32,
+        length: u32,
+    },
+    Piece {
+        index: u32,
+        begin: u32,
+        block: Vec<u8>,
+    },
+    Cancel {
+        index: u32,
+        begin: u32,
+        length: u32,
+    },
 }
 
 impl Encode for Messages {
@@ -116,49 +128,61 @@ impl Encode for Messages {
         match self {
             Self::KeepAlive => {
                 i.put_u32(0);
-            },
+            }
             Self::Flag(flag) => {
                 i.put_u32(1);
                 i.put_u8((*flag) as u8);
-            },
-            Self::Have{piece_index} => {
+            }
+            Self::Have { piece_index } => {
                 i.put_u32(5);
                 i.put_u8(4);
                 i.put_u32(*piece_index);
-            },
+            }
             Self::BitField { bitfield } => {
                 i.put_u32(1 + bitfield.len() as u32);
                 i.put_u8(5);
                 i.put_slice(&bitfield);
-            },
-            Self::Request { index, begin, length } => {
+            }
+            Self::Request {
+                index,
+                begin,
+                length,
+            } => {
                 i.put_u32(13);
                 i.put_u8(6);
                 i.put_u32(*index);
                 i.put_u32(*begin);
                 i.put_u32(*length);
-            },
-            Self::Piece { index, begin, block } => {
+            }
+            Self::Piece {
+                index,
+                begin,
+                block,
+            } => {
                 i.put_u32(9 + block.len() as u32);
                 i.put_u8(7);
                 i.put_u32(*index);
                 i.put_u32(*begin);
                 i.put_slice(&block);
-            },
-            Self::Cancel { index, begin, length } => {
+            }
+            Self::Cancel {
+                index,
+                begin,
+                length,
+            } => {
                 i.put_u32(13);
                 i.put_u8(8);
                 i.put_u32(*index);
                 i.put_u32(*begin);
                 i.put_u32(*length);
-            },
+            }
         }
     }
 }
 
 impl Decode for Messages {
     type T = Self;
-    
+
     fn decode<T: Buf>(b: &mut T) -> Result<Self::T> {
         let len = b.try_get_u32()? as usize;
         if len == 0 {
@@ -168,33 +192,47 @@ impl Decode for Messages {
         let id = b.try_get_u8()?;
 
         match id {
-            4 => Ok(Self::Have { piece_index: b.try_get_u32()?}),
+            4 => Ok(Self::Have {
+                piece_index: b.try_get_u32()?,
+            }),
             5 => {
                 let mut bitfield = vec![0 as u8; len - 1];
                 b.try_copy_to_slice(&mut bitfield)?;
                 Ok(Self::BitField { bitfield: bitfield })
-            },
+            }
             6 => {
                 let index = b.try_get_u32()?;
                 let begin = b.try_get_u32()?;
                 let length = b.try_get_u32()?;
-                Ok(Self::Request { index, begin, length })
-            },
+                Ok(Self::Request {
+                    index,
+                    begin,
+                    length,
+                })
+            }
             7 => {
                 let index = b.try_get_u32()?;
                 let begin = b.try_get_u32()?;
                 let mut block = vec![0 as u8; len - 9];
                 b.try_copy_to_slice(&mut block)?;
-                Ok(Self::Piece { index, begin, block })
-            },
+                Ok(Self::Piece {
+                    index,
+                    begin,
+                    block,
+                })
+            }
             8 => {
                 let index = b.try_get_u32()?;
                 let begin = b.try_get_u32()?;
                 let length = b.try_get_u32()?;
-                Ok(Self::Cancel { index, begin, length })
-            },
+                Ok(Self::Cancel {
+                    index,
+                    begin,
+                    length,
+                })
+            }
             i if len == 1 => Ok(Self::Flag(FlagMessages::try_from(i)?)),
-            _ => Err(ProtocolError::BadId) 
+            _ => Err(ProtocolError::BadId),
         }
     }
 }
@@ -203,8 +241,8 @@ impl Decode for Messages {
 mod test {
     use std::time::SystemTime;
 
-    use sha1::{Sha1, Digest};
     use bytes::{Buf, Bytes};
+    use sha1::{Digest, Sha1};
 
     use super::*;
 
@@ -212,7 +250,6 @@ mod test {
         let mut hasher = Sha1::new();
         hasher.update(b);
         return hasher.finalize().to_vec();
-
     }
 
     #[test]
@@ -221,8 +258,11 @@ mod test {
         let info_hash = do_sha1_hash(format!("info:{:?}", time).as_bytes());
         let peer_id = do_sha1_hash(format!("peer:{:?}", time).as_bytes());
 
-        let hs = Handshake{
-            peer_ctx: PeerContext { info_hash: info_hash.clone(), peer_id: peer_id.clone() }
+        let hs = Handshake {
+            peer_ctx: PeerContext {
+                info_hash: info_hash.clone(),
+                peer_id: peer_id.clone(),
+            },
         };
         let mut buf = BytesMut::new();
         hs.encode(&mut buf);
@@ -249,13 +289,13 @@ mod test {
     }
     #[test]
     fn bitfield_cap() {
-        let bf_b_orig = hex::decode("0000001905fffffffffffffffffffffffffffffffffffffffffffffffe").unwrap();
+        let bf_b_orig =
+            hex::decode("0000001905fffffffffffffffffffffffffffffffffffffffffffffffe").unwrap();
         let mut bytes = BytesMut::from(bf_b_orig.as_slice());
         let msg = Messages::decode(&mut bytes).unwrap();
         let mut hs_b = BytesMut::new();
         msg.encode(&mut hs_b);
         let hs_b = hs_b.to_vec();
         assert_eq!(hs_b, bf_b_orig);
-
     }
 }
