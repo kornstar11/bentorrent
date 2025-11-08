@@ -10,7 +10,7 @@ const HANDSHAKE_PROTOCOL_ID: &[u8] = "BitTorrent protocol".as_bytes();
 type Result<T> = std::result::Result<T, ProtocolError>;
 
 #[derive(Error, Debug)]
-enum ProtocolError {
+pub enum ProtocolError {
     #[error("try get error")]
     TryGetError(#[from] TryGetError),
     #[error("Bad id")]
@@ -39,6 +39,7 @@ trait Decode {
 // reserved: eight (8) reserved bytes. All current implementations use all zeroes. Each bit in these bytes can be used to change the behavior of the protocol. An email from Bram suggests that trailing bits should be used first, so that leading bits may be used to change the meaning of trailing bits.
 // info_hash: 20-byte SHA1 hash of the info key in the metainfo file. This is the same info_hash that is transmitted in tracker requests.
 // peer_id: 20-byte string used as a unique ID for the client. This is usually the same peer_id that is transmitted in tracker requests (but not always e.g. an anonymity option in Azureus).
+#[derive(Debug, Clone)]
 pub struct Handshake {
     pub peer_ctx: PeerContext,
 }
@@ -78,7 +79,7 @@ impl Decode for Handshake {
 
 ///
 /// Simple flag based messages
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum FlagMessages {
     Choke = 0,
     Unchoke = 1,
@@ -99,7 +100,7 @@ impl TryFrom<u8> for FlagMessages {
         }
     }
 }
-
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Messages {
     KeepAlive,
     Flag(FlagMessages),
@@ -172,44 +173,38 @@ impl Decode for Messages {
                 let mut bitfield = vec![0 as u8; len - 1];
                 b.try_copy_to_slice(&mut bitfield)?;
                 Ok(Self::BitField { bitfield: bitfield })
-            }
+            },
+            6 => {
+                let index = b.try_get_u32()?;
+                let begin = b.try_get_u32()?;
+                let length = b.try_get_u32()?;
+                Ok(Self::Request { index, begin, length })
+            },
+            7 => {
+                let index = b.try_get_u32()?;
+                let begin = b.try_get_u32()?;
+                let mut block = vec![0 as u8; len - 9];
+                b.try_copy_to_slice(&mut block)?;
+                Ok(Self::Piece { index, begin, block })
+            },
+            8 => {
+                let index = b.try_get_u32()?;
+                let begin = b.try_get_u32()?;
+                let length = b.try_get_u32()?;
+                Ok(Self::Cancel { index, begin, length })
+            },
             i if len == 1 => Ok(Self::Flag(FlagMessages::try_from(i)?)),
             _ => Err(ProtocolError::BadId) 
         }
     }
 }
 
-// impl Decode for FlagMessages {
-//     type T = Self;
-
-//     fn decode<T: Buf>(b: &mut T) -> Result<Self::T> {
-//         let len = b.try_get_u32()?;
-//         if len == 0 {
-//             Ok(Self::KeepAlive)
-//         } else if len == 1 {
-//             let id = b.try_get_u8()?;
-//             match id {
-//                 0 => Ok(Self::Choke),
-//                 1 => Ok(Self::Unchoke),
-//                 2 => Ok(Self::Interested),
-//                 3 => Ok(Self::NotInterested),
-//                 _ => Err(ProtocolError::BadId)
-//             }
-//         } else {
-//             Err(ProtocolError::OtherMessage)
-//         }
-//     }
-// }
-
-
-
-
 #[cfg(test)]
 mod test {
     use std::time::SystemTime;
 
     use sha1::{Sha1, Digest};
-    use bytes::Buf;
+    use bytes::{Buf, Bytes};
 
     use super::*;
 
@@ -239,5 +234,28 @@ mod test {
 
         let handshake = Handshake::decode(&mut buf).unwrap();
         assert_eq!(handshake.peer_ctx.info_hash, info_hash)
+    }
+
+    #[test]
+    fn handshake_cap() {
+        let hs_b_orig = hex::decode("13426974546f7272656e742070726f746f636f6c00000000000000000164fe7ef1105c57764170edf603c439d64214f1b86a737fe80caf680259963724652756ee4d165b")
+            .unwrap();
+        let mut bytes = BytesMut::from(hs_b_orig.as_slice());
+        let hs = Handshake::decode(&mut bytes).unwrap();
+        let mut hs_b = BytesMut::new();
+        hs.encode(&mut hs_b);
+        let hs_b = hs_b.to_vec();
+        assert_eq!(hs_b, hs_b_orig);
+    }
+    #[test]
+    fn bitfield_cap() {
+        let bf_b_orig = hex::decode("0000001905fffffffffffffffffffffffffffffffffffffffffffffffe").unwrap();
+        let mut bytes = BytesMut::from(bf_b_orig.as_slice());
+        let msg = Messages::decode(&mut bytes).unwrap();
+        let mut hs_b = BytesMut::new();
+        msg.encode(&mut hs_b);
+        let hs_b = hs_b.to_vec();
+        assert_eq!(hs_b, bf_b_orig);
+
     }
 }
