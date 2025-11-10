@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot::{Receiver as OReceiver, Sender as OSender};
+use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter};
 use crate::peer::protocol::{FlagMessages, Handshake};
 
 use super::protocol::Messages;
@@ -29,6 +30,14 @@ impl PeerBlockMap {
         btp.insert(peer_id);
     }
 
+    pub fn get_peers_with_block(&self, block: u32) -> Vec<InternalPeerId> {
+        if let Some(peers) = self.blocks_to_peers.get(&block) {
+            peers.iter().map(|peer| Arc::clone(peer)).collect::<Vec<_>>()
+        } else {
+            vec![]
+        }
+    }
+
     pub fn remove_block(&mut self, peer_id: InternalPeerId, block: u32) {
         let ptb = self.peers_to_blocks
             .entry(Arc::clone(&peer_id))
@@ -39,14 +48,13 @@ impl PeerBlockMap {
             .entry(block)
             .or_insert_with(|| HashSet::new());
         btp.remove(&peer_id);
-
     }
 
-    pub fn remove_peer(&mut self, peer_id: InternalPeerId) {
-        if let Some(blocks) = self.peers_to_blocks.remove(&peer_id) {
+    pub fn remove_peer(&mut self, peer_id: &InternalPeerId) {
+        if let Some(blocks) = self.peers_to_blocks.remove(peer_id) {
             for block in blocks.into_iter() {
                 if let Some(peers) = self.blocks_to_peers.get_mut(&block) {
-                    peers.remove(&peer_id);
+                    peers.remove(peer_id);
                 }
             }
         }
@@ -55,11 +63,12 @@ impl PeerBlockMap {
     
 }
 
+#[derive(Default, Debug)]
 struct TorrentState {
     peers: HashSet<InternalPeerId>,
     peers_interested: HashSet<InternalPeerId>,
     peers_not_choking: HashSet<InternalPeerId>,
-    info_hash: Vec<u8>,
+    block_peer_map: PeerBlockMap,
 }
 
 impl TorrentState {
@@ -117,23 +126,30 @@ impl TorrentState {
         }
     }
 
+    pub fn add_blocks_for_peer(&mut self, peer_id: PeerId, blocks: Vec<u32>) {
+        let peer_id = self.get_peer_id(peer_id);
+        for block in blocks {
+            self.block_peer_map.add_block(Arc::clone(&peer_id), block);
+        }
+    }
+
     pub fn remove_peer(&mut self, peer_id: PeerId) -> Option<PeerId> {
         let peer_id = self.get_peer_id(peer_id);
         self.peers.remove(&peer_id);
         self.peers_interested.remove(&peer_id);
         self.peers_not_choking.remove(&peer_id);
+        self.block_peer_map.remove_peer(&peer_id);
 
         return Arc::into_inner(peer_id);
     }
     
 }
 
-/*
 ///
 /// Messages
 pub struct ProtocolMessage {
     msg: Messages,
-    peer_id: Vec<u8>,
+    peer_id: PeerId,
     ack: OSender<Option<Messages>>,
 }
 
@@ -142,26 +158,42 @@ enum PeerStateMessage {
     Protocol(ProtocolMessage)
 }
 
-struct TorrentState {
-    peers: HashMap<Vec<u8>, PeerState>,
+struct TorrentProcessor {
+    torrent_state: TorrentState,
     info_hash: Vec<u8>,
 }
 
-impl TorrentState {
+impl TorrentProcessor {
     pub async fn start(mut self, mut rx: Receiver<ProtocolMessage>) -> Result<()> {
         log::info!("Starting torrent processing...");
         while let Some(msg) = rx.recv().await {
-            let peer = self.peers.entry(msg.peer_id).or_insert_with(|| {
-                PeerState::default()
-            });
-
+            let peer_id = msg.peer_id;
             match msg.msg {
                 Messages::KeepAlive => {
                     // ignore
                 },
                 Messages::Flag(flag) => {
-                    peer.process_flag_update(flag);
+                    match flag {
+                        FlagMessages::Choke => self.torrent_state.set_peer_choked_us(peer_id, true),
+                        FlagMessages::Unchoke => self.torrent_state.set_peer_choked_us(peer_id, false),
+                        FlagMessages::Interested => self.torrent_state.set_peers_interested_in_us(peer_id, true),
+                        FlagMessages::NotInterested => self.torrent_state.set_peers_interested_in_us(peer_id, false),
+                    }
                 },
+                Messages::Have { piece_index } => {
+                    self.torrent_state.add_blocks_for_peer(peer_id, vec![piece_index]);
+                }
+                Messages::BitField { bitfield } => {
+                    let bitfield: BitFieldReaderIter = BitFieldReader::from(bitfield).into();
+                    let blocks_present =  bitfield
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(_, was_set)| {
+                            *was_set
+                        }).map(|(block, _)| block as u32)
+                        .collect::<Vec<_>>();
+                    self.torrent_state.add_blocks_for_peer(peer_id, blocks_present);
+                }
                 _ => {todo!()}
                 
             }
@@ -170,4 +202,3 @@ impl TorrentState {
         Ok(())
     }
 }
-*/

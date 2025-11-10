@@ -3,7 +3,7 @@ use std::ops::Shr;
 use bytes::{Bytes, BytesMut, BufMut, Buf};
 
 const MASK: u8 = 0b10000000;
-struct BitFieldReader {
+pub struct BitFieldReader {
     bytes: Bytes,
 }
 
@@ -35,6 +35,31 @@ impl BitFieldReader {
         }
         None
     }
+}
+
+pub struct BitFieldReaderIter {
+    reader: BitFieldReader,
+    pos: usize
+}
+
+impl From<BitFieldReader> for BitFieldReaderIter {
+    fn from(reader: BitFieldReader) -> Self {
+        Self {
+            reader,
+            pos: 0,
+        }
+    }
+}
+
+impl Iterator for BitFieldReaderIter {
+    type Item = bool;
+    
+    fn next(&mut self) -> Option<Self::Item> {
+        let v = self.reader.get_bit(self.pos);
+        self.pos += 1;
+        v
+    }
+    
 }
 
 struct BitFieldWriter {
