@@ -10,11 +10,55 @@ use super::protocol::Messages;
 type PeerId = Vec<u8>;
 type InternalPeerId = Arc<PeerId>;
 
+#[derive(Default, Debug)]
+struct PeerBlockMap {
+    blocks_to_peers: HashMap<u32, HashSet<InternalPeerId>>,
+    peers_to_blocks: HashMap<InternalPeerId, HashSet<u32>>,
+}
+
+impl PeerBlockMap {
+    pub fn add_block(&mut self, peer_id: InternalPeerId, block: u32) {
+        let ptb = self.peers_to_blocks
+            .entry(Arc::clone(&peer_id))
+            .or_insert_with(|| HashSet::new());
+        ptb.insert(block);
+
+        let btp = self.blocks_to_peers
+            .entry(block)
+            .or_insert_with(|| HashSet::new());
+        btp.insert(peer_id);
+    }
+
+    pub fn remove_block(&mut self, peer_id: InternalPeerId, block: u32) {
+        let ptb = self.peers_to_blocks
+            .entry(Arc::clone(&peer_id))
+            .or_insert_with(|| HashSet::new());
+        ptb.remove(&block);
+
+        let btp = self.blocks_to_peers
+            .entry(block)
+            .or_insert_with(|| HashSet::new());
+        btp.remove(&peer_id);
+
+    }
+
+    pub fn remove_peer(&mut self, peer_id: InternalPeerId) {
+        if let Some(blocks) = self.peers_to_blocks.remove(&peer_id) {
+            for block in blocks.into_iter() {
+                if let Some(peers) = self.blocks_to_peers.get_mut(&block) {
+                    peers.remove(&peer_id);
+                }
+            }
+        }
+    }
+
+    
+}
+
 struct TorrentState {
     peers: HashSet<InternalPeerId>,
     peers_interested: HashSet<InternalPeerId>,
     peers_not_choking: HashSet<InternalPeerId>,
-    //blocks_to_peers: HashMap<u32, HashSet<InternalPeerId>>,
     info_hash: Vec<u8>,
 }
 
