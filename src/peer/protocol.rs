@@ -27,7 +27,7 @@ trait Encode {
 
 trait Decode {
     type T;
-    fn decode<T: Buf>(b: &mut T) -> Result<Self::T>;
+    fn decode<B: Buf>(b: &mut B) -> Result<Self::T>;
 }
 
 /// Handshake packet
@@ -55,7 +55,7 @@ impl Encode for Handshake {
 impl Decode for Handshake {
     type T = Self;
 
-    fn decode<T: Buf>(b: &mut T) -> Result<Self::T> {
+    fn decode<B: Buf>(b: &mut B) -> Result<Self::T> {
         let p_str_len = b.try_get_u8()?;
         let mut p_str = vec![0 as u8; p_str_len as usize];
         b.try_copy_to_slice(&mut p_str)?;
@@ -183,7 +183,7 @@ impl Encode for Messages {
 impl Decode for Messages {
     type T = Self;
 
-    fn decode<T: Buf>(b: &mut T) -> Result<Self::T> {
+    fn decode<B: Buf>(b: &mut B) -> Result<Self::T> {
         let len = b.try_get_u32()? as usize;
         if len == 0 {
             return Ok(Self::KeepAlive);

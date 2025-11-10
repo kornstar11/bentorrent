@@ -1,3 +1,5 @@
+mod bitfield;
+mod connection;
 mod error;
 mod protocol;
 mod tracker;
