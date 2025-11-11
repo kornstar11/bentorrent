@@ -1,6 +1,6 @@
 use std::ops::Shr;
 
-use bytes::{Bytes, BytesMut, BufMut, Buf};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 const MASK: u8 = 0b10000000;
 pub struct BitFieldReader {
@@ -39,27 +39,23 @@ impl BitFieldReader {
 
 pub struct BitFieldReaderIter {
     reader: BitFieldReader,
-    pos: usize
+    pos: usize,
 }
 
 impl From<BitFieldReader> for BitFieldReaderIter {
     fn from(reader: BitFieldReader) -> Self {
-        Self {
-            reader,
-            pos: 0,
-        }
+        Self { reader, pos: 0 }
     }
 }
 
 impl Iterator for BitFieldReaderIter {
     type Item = bool;
-    
+
     fn next(&mut self) -> Option<Self::Item> {
         let v = self.reader.get_bit(self.pos);
         self.pos += 1;
         v
     }
-    
 }
 
 struct BitFieldWriter {
@@ -102,7 +98,10 @@ mod test {
 
     #[test]
     fn read_bits() {
-        let expected = vec![true, false, false, false, true, false, false, true, true, true, true, true, true, false, false, false];
+        let expected = vec![
+            true, false, false, false, true, false, false, true, true, true, true, true, true,
+            false, false, false,
+        ];
         let byte1: u8 = 0b10001001;
         let byte2: u8 = 0b11111000;
         let bitfield = BitFieldReader::from(vec![byte1, byte2]);
@@ -115,9 +114,12 @@ mod test {
         assert_eq!(result, expected);
     }
 
-    #[test] 
+    #[test]
     fn roundtrip_bits() {
-        let expected = vec![true, false, false, false, true, false, false, true, true, true, true, true, true, false, false, false];
+        let expected = vec![
+            true, false, false, false, true, false, false, true, true, true, true, true, true,
+            false, false, false,
+        ];
         let mut writer = BitFieldWriter::new(BytesMut::new());
         for bit in expected.iter() {
             writer.put_bit(*bit);
@@ -132,8 +134,5 @@ mod test {
         }
 
         assert_eq!(result, expected);
-
-
     }
-
 }
