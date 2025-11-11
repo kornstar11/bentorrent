@@ -2,6 +2,8 @@ use crate::model::V1Torrent;
 use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter};
 use crate::peer::protocol::{FlagMessages, Handshake};
 use anyhow::Result;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use tokio::sync::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -169,9 +171,14 @@ struct PeerStartMessage {
     tx: Sender<Messages>,
 }
 
+impl PeerStartMessage {
+    fn into(self) -> (Handshake, Receiver<ProtocolMessage>, Sender<Messages>) {
+        (self.handshake, self.rx, self.tx)
+    }
+}
+
 ///
 /// Processor logic
-
 struct RequestedPiece {
     peer_id: InternalPeerId,
     index: u32,
@@ -186,18 +193,46 @@ struct TorrentProcessor {
 }
 
 impl TorrentProcessor {
-    pub async fn start(mut self, rx: Receiver<PeerStartMessage>) {
+    pub async fn start(mut self, mut rx: Receiver<PeerStartMessage>) {
         let state = Arc::new(Mutex::new(self));
+
+        let mut fq = FuturesUnordered::new();
+        loop {
+            tokio::select! {
+                Some(new) = rx.recv() => {
+                    // small mapper
+                    let (handshake, mut rx, tx) = new.into();
+                    fq.push(Self::handle_peer_msgs(Arc::clone(&state), rx, handshake));
+
+                    
+                }
+                x = fq.next() => {
+                    x;
+                    ()
+                }
+                else => break,
+
+            }
+
+        }
+        // while let Some(msg) = rx.recv().await {
+        //     tokio::select! {
+
+        //     }
+        //     //let (handshake, rx, tx) = msg.into();
+
+        // }
+
 
 
     }
 
-    async fn handle_peer_msgs(state: Arc<Mutex<Self>>, mut peer_msg: PeerStartMessage) -> Result<()> {
+    async fn handle_peer_msgs(state: Arc<Mutex<Self>>, mut rx: Receiver<ProtocolMessage>, handshake: Handshake) -> Result<()> {
         log::info!("Starting torrent processing...");
-        let peer_id = Arc::new(peer_msg.handshake.peer_ctx.peer_id);
-        while let Some(msg) = peer_msg.rx.recv().await {
-            let mut state = state.lock().await;
+        let peer_id = Arc::new(handshake.peer_ctx.peer_id);
+        while let Some(msg) = rx.recv().await {
             let peer_id = Arc::clone(&peer_id);
+            let mut state = state.lock().await;
             match msg.msg {
                 Messages::KeepAlive => {
                     // TODO reset timer or something, and expire after xx time
@@ -249,7 +284,7 @@ impl TorrentProcessor {
                         .outstanding_requests
                         .iter()
                         .enumerate()
-                        .find(|(_, o)| {
+                        .find(|(idx, o)| {
                             o.peer_id == peer_id
                                 && o.index == index
                                 && o.begin == begin
