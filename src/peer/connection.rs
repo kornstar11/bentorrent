@@ -2,6 +2,7 @@ use crate::model::V1Torrent;
 use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter};
 use crate::peer::protocol::{FlagMessages, Handshake};
 use anyhow::Result;
+use tokio::sync::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -160,6 +161,8 @@ pub struct ProtocolMessage {
     msg: Messages,
 }
 
+///
+/// bidirectional channels for a single peers connection
 struct PeerStartMessage {
     handshake: Handshake,
     rx: Receiver<ProtocolMessage>,
@@ -169,7 +172,7 @@ struct PeerStartMessage {
 ///
 /// Processor logic
 
-struct RequestedBlock {
+struct RequestedPiece {
     peer_id: InternalPeerId,
     index: u32,
     begin: u32,
@@ -179,31 +182,38 @@ struct RequestedBlock {
 struct TorrentProcessor {
     torrent: V1Torrent,
     torrent_state: TorrentState,
-    outstanding_requests: Vec<RequestedBlock>,
+    outstanding_requests: Vec<RequestedPiece>,
 }
 
 impl TorrentProcessor {
-    async fn handle_peer_msgs(&mut self, mut peer_msg: PeerStartMessage) -> Result<()> {
+    pub async fn start(mut self, rx: Receiver<PeerStartMessage>) {
+        let state = Arc::new(Mutex::new(self));
+
+
+    }
+
+    async fn handle_peer_msgs(state: Arc<Mutex<Self>>, mut peer_msg: PeerStartMessage) -> Result<()> {
         log::info!("Starting torrent processing...");
         let peer_id = Arc::new(peer_msg.handshake.peer_ctx.peer_id);
         while let Some(msg) = peer_msg.rx.recv().await {
+            let mut state = state.lock().await;
             let peer_id = Arc::clone(&peer_id);
             match msg.msg {
                 Messages::KeepAlive => {
                     // TODO reset timer or something, and expire after xx time
                 }
                 Messages::Flag(flag) => match flag {
-                    FlagMessages::Choke => self.torrent_state.set_peer_choked_us(peer_id, true),
-                    FlagMessages::Unchoke => self.torrent_state.set_peer_choked_us(peer_id, false),
+                    FlagMessages::Choke => state.torrent_state.set_peer_choked_us(peer_id, true),
+                    FlagMessages::Unchoke => state.torrent_state.set_peer_choked_us(peer_id, false),
                     FlagMessages::Interested => {
-                        self.torrent_state.set_peers_interested_in_us(peer_id, true)
+                        state.torrent_state.set_peers_interested_in_us(peer_id, true)
                     }
-                    FlagMessages::NotInterested => self
+                    FlagMessages::NotInterested => state
                         .torrent_state
                         .set_peers_interested_in_us(peer_id, false),
                 },
                 Messages::Have { piece_index } => {
-                    self.torrent_state
+                    state.torrent_state
                         .add_pieces_for_peer(peer_id, vec![piece_index]);
                 }
                 Messages::BitField { bitfield } => {
@@ -214,7 +224,7 @@ impl TorrentProcessor {
                         .filter(|(_, was_set)| *was_set)
                         .map(|(block, _)| block as u32)
                         .collect::<Vec<_>>();
-                    self.torrent_state
+                    state.torrent_state
                         .add_pieces_for_peer(peer_id, pieces_present);
                 }
                 Messages::Request {
@@ -222,24 +232,24 @@ impl TorrentProcessor {
                     begin,
                     length,
                 } => {
-                    self.outstanding_requests.push(RequestedBlock {
+                    state.outstanding_requests.push(RequestedPiece {
                         peer_id,
                         index,
                         begin,
                         length,
                     });
                 }
-                Messages::Request {
+                Messages::Cancel {
                     index,
                     begin,
                     length,
                 } => {
                     // attempt to cancel
-                    let idx_to_remove_opt = self
+                    let idx_to_remove_opt = state
                         .outstanding_requests
                         .iter()
                         .enumerate()
-                        .find(|(idx, o)| {
+                        .find(|(_, o)| {
                             o.peer_id == peer_id
                                 && o.index == index
                                 && o.begin == begin
@@ -248,7 +258,7 @@ impl TorrentProcessor {
                         .map(|(idx, _)| idx);
 
                     if let Some(idx) = idx_to_remove_opt {
-                        self.outstanding_requests.remove(idx);
+                        state.outstanding_requests.remove(idx);
                     }
                 }
 
