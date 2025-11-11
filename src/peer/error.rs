@@ -1,13 +1,17 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum Error {
+pub enum PeerError {
     #[error("Decoder error {0}")]
     Decode(String),
+    #[error("Bad Piece Bounds: {0} {1}")]
+    BadBounds(usize, usize),
+    #[error("Bad Piece Index: {0}")]
+    BadPieceIdx(usize)
 }
 
-impl Error {
-    pub fn decode(s: &str) -> Error {
-        Error::Decode(s.to_string())
+impl PeerError {
+    pub fn decode(s: &str) -> PeerError {
+        PeerError::Decode(s.to_string())
     }
 }

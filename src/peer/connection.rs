@@ -1,5 +1,6 @@
 use crate::model::V1Torrent;
 use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter};
+use crate::peer::file::TorrentWriter;
 use crate::peer::protocol::{FlagMessages, Handshake};
 use anyhow::Result;
 use futures::StreamExt;
@@ -14,8 +15,6 @@ use super::protocol::Messages;
 
 type PeerId = Vec<u8>;
 type InternalPeerId = Arc<PeerId>;
-
-const BLOCK_SIZE: usize = 2 ^ 14;
 
 #[derive(Default, Debug)]
 struct PeerPieceMap {
@@ -186,50 +185,50 @@ struct RequestedPiece {
     length: u32,
 }
 
-struct TorrentProcessor {
+struct TorrentProcessor<W> {
     torrent: V1Torrent,
     torrent_state: TorrentState,
-    outstanding_requests: Vec<RequestedPiece>,
+    torrent_writer: W,
 }
 
-impl TorrentProcessor {
+impl <W: TorrentWriter> TorrentProcessor<W> {
     pub async fn start(mut self, mut rx: Receiver<PeerStartMessage>) {
         let state = Arc::new(Mutex::new(self));
 
-        let mut fq = FuturesUnordered::new();
+        let mut handle_peer_requests_fq = FuturesUnordered::new();
         loop {
             tokio::select! {
                 Some(new) = rx.recv() => {
                     // small mapper
-                    let (handshake, mut rx, tx) = new.into();
-                    fq.push(Self::handle_peer_msgs(Arc::clone(&state), rx, handshake));
+                    let (handshake, rx, tx) = new.into();
+                    handle_peer_requests_fq.push(Self::handle_peer_msgs(Arc::clone(&state), rx, handshake));
 
                     
                 }
-                x = fq.next() => {
-                    x;
+                Some((peer_id, res)) = handle_peer_requests_fq.next() => {
+                    //closed_peer = Some(peer_id);
                     ()
                 }
                 else => break,
 
             }
-
         }
-        // while let Some(msg) = rx.recv().await {
-        //     tokio::select! {
-
-        //     }
-        //     //let (handshake, rx, tx) = msg.into();
-
-        // }
-
-
-
+    }
+    ///
+    /// Maps the result so that we always return the peer_id
+    async fn handle_peer_msgs(state: Arc<Mutex<Self>>, rx: Receiver<ProtocolMessage>, handshake: Handshake) -> (PeerId, Result<()>) {
+        let peer_id = handshake.peer_ctx.peer_id.clone();
+        let res = Self::inner_handle_peer_msgs(state, rx, handshake).await;
+        (peer_id, res)
     }
 
-    async fn handle_peer_msgs(state: Arc<Mutex<Self>>, mut rx: Receiver<ProtocolMessage>, handshake: Handshake) -> Result<()> {
+    /// 
+    /// Handle all incoming state updates from a single peer, and requests
+    async fn inner_handle_peer_msgs(state: Arc<Mutex<Self>>, mut rx: Receiver<ProtocolMessage>, handshake: Handshake) -> Result<()> {
         log::info!("Starting torrent processing...");
         let peer_id = Arc::new(handshake.peer_ctx.peer_id);
+        let mut outstanding_requests = vec![];
+
         while let Some(msg) = rx.recv().await {
             let peer_id = Arc::clone(&peer_id);
             let mut state = state.lock().await;
@@ -267,7 +266,7 @@ impl TorrentProcessor {
                     begin,
                     length,
                 } => {
-                    state.outstanding_requests.push(RequestedPiece {
+                    outstanding_requests.push(RequestedPiece {
                         peer_id,
                         index,
                         begin,
@@ -280,11 +279,10 @@ impl TorrentProcessor {
                     length,
                 } => {
                     // attempt to cancel
-                    let idx_to_remove_opt = state
-                        .outstanding_requests
+                    let idx_to_remove_opt = outstanding_requests
                         .iter()
                         .enumerate()
-                        .find(|(idx, o)| {
+                        .find(|(_, o)| {
                             o.peer_id == peer_id
                                 && o.index == index
                                 && o.begin == begin
@@ -293,12 +291,18 @@ impl TorrentProcessor {
                         .map(|(idx, _)| idx);
 
                     if let Some(idx) = idx_to_remove_opt {
-                        state.outstanding_requests.remove(idx);
+                        outstanding_requests.remove(idx);
                     }
-                }
-
-                _ => {
-                    todo!()
+                },
+                Messages::Piece {
+                    index,
+                    begin,
+                    block,
+                } => {
+                    state
+                        .torrent_writer
+                        .write_piece(index, begin, block)
+                        .await?;
                 }
             }
         }
