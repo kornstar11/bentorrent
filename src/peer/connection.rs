@@ -166,7 +166,7 @@ struct PeerStartMessage {
     tx: Sender<Messages>,
 }
 
-/// 
+///
 /// Processor logic
 
 struct RequestedBlock {
@@ -176,22 +176,21 @@ struct RequestedBlock {
     length: u32,
 }
 
-
 struct TorrentProcessor {
     torrent: V1Torrent,
     torrent_state: TorrentState,
-    outstanding_requests: Vec<RequestedBlock>
+    outstanding_requests: Vec<RequestedBlock>,
 }
 
 impl TorrentProcessor {
-    pub async fn handle_peer(&mut self, mut peer_msg: PeerStartMessage) -> Result<()> {
+    async fn handle_peer_msgs(&mut self, mut peer_msg: PeerStartMessage) -> Result<()> {
         log::info!("Starting torrent processing...");
         let peer_id = Arc::new(peer_msg.handshake.peer_ctx.peer_id);
         while let Some(msg) = peer_msg.rx.recv().await {
             let peer_id = Arc::clone(&peer_id);
             match msg.msg {
                 Messages::KeepAlive => {
-                    // ignore
+                    // TODO reset timer or something, and expire after xx time
                 }
                 Messages::Flag(flag) => match flag {
                     FlagMessages::Choke => self.torrent_state.set_peer_choked_us(peer_id, true),
@@ -206,7 +205,7 @@ impl TorrentProcessor {
                 Messages::Have { piece_index } => {
                     self.torrent_state
                         .add_pieces_for_peer(peer_id, vec![piece_index]);
-                },
+                }
                 Messages::BitField { bitfield } => {
                     let bitfield: BitFieldReaderIter = BitFieldReader::from(bitfield).into();
                     let pieces_present = bitfield
@@ -217,9 +216,40 @@ impl TorrentProcessor {
                         .collect::<Vec<_>>();
                     self.torrent_state
                         .add_pieces_for_peer(peer_id, pieces_present);
-                },
-                Messages::Request { index, begin, length } => {
-                    self.outstanding_requests.push(RequestedBlock { peer_id, index, begin, length });
+                }
+                Messages::Request {
+                    index,
+                    begin,
+                    length,
+                } => {
+                    self.outstanding_requests.push(RequestedBlock {
+                        peer_id,
+                        index,
+                        begin,
+                        length,
+                    });
+                }
+                Messages::Request {
+                    index,
+                    begin,
+                    length,
+                } => {
+                    // attempt to cancel
+                    let idx_to_remove_opt = self
+                        .outstanding_requests
+                        .iter()
+                        .enumerate()
+                        .find(|(idx, o)| {
+                            o.peer_id == peer_id
+                                && o.index == index
+                                && o.begin == begin
+                                && o.length == length
+                        })
+                        .map(|(idx, _)| idx);
+
+                    if let Some(idx) = idx_to_remove_opt {
+                        self.outstanding_requests.remove(idx);
+                    }
                 }
 
                 _ => {
