@@ -80,21 +80,14 @@ struct TorrentState {
 }
 
 impl TorrentState {
-    fn get_peer_id(&mut self, peer_id: PeerId) -> InternalPeerId {
-        let peer_id = if let Some(peer_id) = self.peers.get(&peer_id) {
-            // allows us to reliably reference one peerid
-            Arc::clone(peer_id)
-        } else {
-            let peer_id = Arc::new(peer_id);
-            self.peers.insert(Arc::clone(&peer_id));
-            peer_id
-        };
-
-        return peer_id;
+    fn add_peer_id(&mut self, peer_id: InternalPeerId) {
+        if !self.peers.contains(&peer_id) {
+            self.peers.insert(peer_id);
+        }
     }
 
-    pub fn set_peer_choked_us(&mut self, peer_id: PeerId, choked: bool) {
-        let peer_id = self.get_peer_id(peer_id);
+    pub fn set_peer_choked_us(&mut self, peer_id: InternalPeerId, choked: bool) {
+        self.add_peer_id(Arc::clone(&peer_id));
         if !choked {
             self.peers_not_choking.insert(peer_id);
         } else {
@@ -102,8 +95,8 @@ impl TorrentState {
         }
     }
 
-    pub fn set_peers_interested_in_us(&mut self, peer_id: PeerId, interested: bool) {
-        let peer_id = self.get_peer_id(peer_id);
+    pub fn set_peers_interested_in_us(&mut self, peer_id: InternalPeerId, interested: bool) {
+        self.add_peer_id(Arc::clone(&peer_id));
         if interested {
             self.peers_interested.insert(peer_id);
         } else {
@@ -143,15 +136,15 @@ impl TorrentState {
         }
     }
 
-    pub fn add_pieces_for_peer(&mut self, peer_id: PeerId, pieces: Vec<u32>) {
-        let peer_id = self.get_peer_id(peer_id);
+    pub fn add_pieces_for_peer(&mut self, peer_id: InternalPeerId, pieces: Vec<u32>) {
+        self.add_peer_id(Arc::clone(&peer_id));
         for piece in pieces {
             self.block_peer_map.add_piece(Arc::clone(&peer_id), piece);
         }
     }
 
-    pub fn remove_peer(&mut self, peer_id: PeerId) -> Option<PeerId> {
-        let peer_id = self.get_peer_id(peer_id);
+    pub fn remove_peer(&mut self, peer_id: InternalPeerId) -> Option<PeerId> {
+        self.add_peer_id(Arc::clone(&peer_id));
         self.peers.remove(&peer_id);
         self.peers_interested.remove(&peer_id);
         self.peers_not_choking.remove(&peer_id);
@@ -165,7 +158,6 @@ impl TorrentState {
 /// Messages
 pub struct ProtocolMessage {
     msg: Messages,
-    peer_id: PeerId,
 }
 
 struct PeerStartMessage {
@@ -174,16 +166,29 @@ struct PeerStartMessage {
     tx: Sender<Messages>,
 }
 
+/// 
+/// Processor logic
+
+struct RequestedBlock {
+    peer_id: InternalPeerId,
+    index: u32,
+    begin: u32,
+    length: u32,
+}
+
+
 struct TorrentProcessor {
-    torrent_state: TorrentState,
     torrent: V1Torrent,
+    torrent_state: TorrentState,
+    outstanding_requests: Vec<RequestedBlock>
 }
 
 impl TorrentProcessor {
-    pub async fn handle_peer(&mut self, peer_msg: &mut PeerStartMessage) -> Result<()> {
+    pub async fn handle_peer(&mut self, mut peer_msg: PeerStartMessage) -> Result<()> {
         log::info!("Starting torrent processing...");
+        let peer_id = Arc::new(peer_msg.handshake.peer_ctx.peer_id);
         while let Some(msg) = peer_msg.rx.recv().await {
-            let peer_id = msg.peer_id;
+            let peer_id = Arc::clone(&peer_id);
             match msg.msg {
                 Messages::KeepAlive => {
                     // ignore
@@ -201,7 +206,7 @@ impl TorrentProcessor {
                 Messages::Have { piece_index } => {
                     self.torrent_state
                         .add_pieces_for_peer(peer_id, vec![piece_index]);
-                }
+                },
                 Messages::BitField { bitfield } => {
                     let bitfield: BitFieldReaderIter = BitFieldReader::from(bitfield).into();
                     let pieces_present = bitfield
@@ -212,7 +217,11 @@ impl TorrentProcessor {
                         .collect::<Vec<_>>();
                     self.torrent_state
                         .add_pieces_for_peer(peer_id, pieces_present);
+                },
+                Messages::Request { index, begin, length } => {
+                    self.outstanding_requests.push(RequestedBlock { peer_id, index, begin, length });
                 }
+
                 _ => {
                     todo!()
                 }
