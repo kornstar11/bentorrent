@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot::{Receiver as OReceiver, Sender as OSender};
+use crate::model::V1Torrent;
 use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter};
 use crate::peer::protocol::{FlagMessages, Handshake};
 
@@ -11,49 +12,51 @@ use super::protocol::Messages;
 type PeerId = Vec<u8>;
 type InternalPeerId = Arc<PeerId>;
 
+const BLOCK_SIZE: usize = 2^14;
+
 #[derive(Default, Debug)]
-struct PeerBlockMap {
-    blocks_to_peers: HashMap<u32, HashSet<InternalPeerId>>,
-    peers_to_blocks: HashMap<InternalPeerId, HashSet<u32>>,
+struct PeerPieceMap {
+    pieces_to_peers: HashMap<u32, HashSet<InternalPeerId>>,
+    peers_to_pieces: HashMap<InternalPeerId, HashSet<u32>>,
 }
 
-impl PeerBlockMap {
-    pub fn add_block(&mut self, peer_id: InternalPeerId, block: u32) {
-        let ptb = self.peers_to_blocks
+impl PeerPieceMap {
+    pub fn add_piece(&mut self, peer_id: InternalPeerId, piece: u32) {
+        let ptb = self.peers_to_pieces
             .entry(Arc::clone(&peer_id))
             .or_insert_with(|| HashSet::new());
-        ptb.insert(block);
+        ptb.insert(piece);
 
-        let btp = self.blocks_to_peers
-            .entry(block)
+        let btp = self.pieces_to_peers
+            .entry(piece)
             .or_insert_with(|| HashSet::new());
         btp.insert(peer_id);
     }
 
-    pub fn get_peers_with_block(&self, block: u32) -> Vec<InternalPeerId> {
-        if let Some(peers) = self.blocks_to_peers.get(&block) {
+    pub fn get_peers_with_piece(&self, piece: u32) -> Vec<InternalPeerId> {
+        if let Some(peers) = self.pieces_to_peers.get(&piece) {
             peers.iter().map(|peer| Arc::clone(peer)).collect::<Vec<_>>()
         } else {
             vec![]
         }
     }
 
-    pub fn remove_block(&mut self, peer_id: InternalPeerId, block: u32) {
-        let ptb = self.peers_to_blocks
+    pub fn remove_piece(&mut self, peer_id: InternalPeerId, piece: u32) {
+        let ptb = self.peers_to_pieces
             .entry(Arc::clone(&peer_id))
             .or_insert_with(|| HashSet::new());
-        ptb.remove(&block);
+        ptb.remove(&piece);
 
-        let btp = self.blocks_to_peers
-            .entry(block)
+        let btp = self.pieces_to_peers
+            .entry(piece)
             .or_insert_with(|| HashSet::new());
         btp.remove(&peer_id);
     }
 
     pub fn remove_peer(&mut self, peer_id: &InternalPeerId) {
-        if let Some(blocks) = self.peers_to_blocks.remove(peer_id) {
+        if let Some(blocks) = self.peers_to_pieces.remove(peer_id) {
             for block in blocks.into_iter() {
-                if let Some(peers) = self.blocks_to_peers.get_mut(&block) {
+                if let Some(peers) = self.pieces_to_peers.get_mut(&block) {
                     peers.remove(peer_id);
                 }
             }
@@ -68,7 +71,7 @@ struct TorrentState {
     peers: HashSet<InternalPeerId>,
     peers_interested: HashSet<InternalPeerId>,
     peers_not_choking: HashSet<InternalPeerId>,
-    block_peer_map: PeerBlockMap,
+    block_peer_map: PeerPieceMap,
 }
 
 impl TorrentState {
@@ -126,10 +129,10 @@ impl TorrentState {
         }
     }
 
-    pub fn add_blocks_for_peer(&mut self, peer_id: PeerId, blocks: Vec<u32>) {
+    pub fn add_pieces_for_peer(&mut self, peer_id: PeerId, pieces: Vec<u32>) {
         let peer_id = self.get_peer_id(peer_id);
-        for block in blocks {
-            self.block_peer_map.add_block(Arc::clone(&peer_id), block);
+        for piece in pieces {
+            self.block_peer_map.add_piece(Arc::clone(&peer_id), piece);
         }
     }
 
@@ -160,7 +163,7 @@ enum PeerStateMessage {
 
 struct TorrentProcessor {
     torrent_state: TorrentState,
-    info_hash: Vec<u8>,
+    torrent: V1Torrent,
 }
 
 impl TorrentProcessor {
@@ -181,18 +184,18 @@ impl TorrentProcessor {
                     }
                 },
                 Messages::Have { piece_index } => {
-                    self.torrent_state.add_blocks_for_peer(peer_id, vec![piece_index]);
+                    self.torrent_state.add_pieces_for_peer(peer_id, vec![piece_index]);
                 }
                 Messages::BitField { bitfield } => {
                     let bitfield: BitFieldReaderIter = BitFieldReader::from(bitfield).into();
-                    let blocks_present =  bitfield
+                    let pieces_present =  bitfield
                         .into_iter()
                         .enumerate()
                         .filter(|(_, was_set)| {
                             *was_set
                         }).map(|(block, _)| block as u32)
                         .collect::<Vec<_>>();
-                    self.torrent_state.add_blocks_for_peer(peer_id, blocks_present);
+                    self.torrent_state.add_pieces_for_peer(peer_id, pieces_present);
                 }
                 _ => {todo!()}
                 

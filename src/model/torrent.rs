@@ -26,7 +26,7 @@ pub struct V1TorrentInfo {
     pub length: i64,
     pub pieces: Vec<V1Piece>,
     pub name: String,
-    pub hash: Vec<u8>,
+    pub info_hash: Vec<u8>,
 }
 
 impl V1TorrentInfo {
@@ -80,7 +80,7 @@ impl<'a> TryFrom<Bencode<'a>> for V1TorrentInfo {
                 length,
                 pieces,
                 name,
-                hash: info_hash,
+                info_hash,
             })
         } else {
             Err(Error::WrongType)

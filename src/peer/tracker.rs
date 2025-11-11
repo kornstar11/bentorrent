@@ -60,7 +60,7 @@ impl TrackerClient {
     }
 
     fn tracker_url(&self) -> String {
-        let info_hash = urlencoding::encode_binary(&self.torrent.info.hash).to_string();
+        let info_hash = urlencoding::encode_binary(&self.torrent.info.info_hash).to_string();
         let peer_id = urlencoding::encode_binary(&self.peer_id).to_string();
         let mut url = Url::parse(&self.torrent.announce).unwrap();
         url.query_pairs_mut()
