@@ -5,9 +5,9 @@ use crate::peer::protocol::{FlagMessages, Handshake};
 use anyhow::Result;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use tokio::sync::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot::{Receiver as OReceiver, Sender as OSender};
 
@@ -191,7 +191,7 @@ struct TorrentProcessor<W> {
     torrent_writer: W,
 }
 
-impl <W: TorrentWriter> TorrentProcessor<W> {
+impl<W: TorrentWriter> TorrentProcessor<W> {
     pub async fn start(mut self, mut rx: Receiver<PeerStartMessage>) {
         let state = Arc::new(Mutex::new(self));
 
@@ -203,7 +203,7 @@ impl <W: TorrentWriter> TorrentProcessor<W> {
                     let (handshake, rx, tx) = new.into();
                     handle_peer_requests_fq.push(Self::handle_peer_msgs(Arc::clone(&state), rx, handshake));
 
-                    
+
                 }
                 Some((peer_id, res)) = handle_peer_requests_fq.next() => {
                     //closed_peer = Some(peer_id);
@@ -216,15 +216,23 @@ impl <W: TorrentWriter> TorrentProcessor<W> {
     }
     ///
     /// Maps the result so that we always return the peer_id
-    async fn handle_peer_msgs(state: Arc<Mutex<Self>>, rx: Receiver<ProtocolMessage>, handshake: Handshake) -> (PeerId, Result<()>) {
+    async fn handle_peer_msgs(
+        state: Arc<Mutex<Self>>,
+        rx: Receiver<ProtocolMessage>,
+        handshake: Handshake,
+    ) -> (PeerId, Result<()>) {
         let peer_id = handshake.peer_ctx.peer_id.clone();
         let res = Self::inner_handle_peer_msgs(state, rx, handshake).await;
         (peer_id, res)
     }
 
-    /// 
+    ///
     /// Handle all incoming state updates from a single peer, and requests
-    async fn inner_handle_peer_msgs(state: Arc<Mutex<Self>>, mut rx: Receiver<ProtocolMessage>, handshake: Handshake) -> Result<()> {
+    async fn inner_handle_peer_msgs(
+        state: Arc<Mutex<Self>>,
+        mut rx: Receiver<ProtocolMessage>,
+        handshake: Handshake,
+    ) -> Result<()> {
         log::info!("Starting torrent processing...");
         let peer_id = Arc::new(handshake.peer_ctx.peer_id);
         let mut outstanding_requests = vec![];
@@ -239,15 +247,16 @@ impl <W: TorrentWriter> TorrentProcessor<W> {
                 Messages::Flag(flag) => match flag {
                     FlagMessages::Choke => state.torrent_state.set_peer_choked_us(peer_id, true),
                     FlagMessages::Unchoke => state.torrent_state.set_peer_choked_us(peer_id, false),
-                    FlagMessages::Interested => {
-                        state.torrent_state.set_peers_interested_in_us(peer_id, true)
-                    }
+                    FlagMessages::Interested => state
+                        .torrent_state
+                        .set_peers_interested_in_us(peer_id, true),
                     FlagMessages::NotInterested => state
                         .torrent_state
                         .set_peers_interested_in_us(peer_id, false),
                 },
                 Messages::Have { piece_index } => {
-                    state.torrent_state
+                    state
+                        .torrent_state
                         .add_pieces_for_peer(peer_id, vec![piece_index]);
                 }
                 Messages::BitField { bitfield } => {
@@ -258,7 +267,8 @@ impl <W: TorrentWriter> TorrentProcessor<W> {
                         .filter(|(_, was_set)| *was_set)
                         .map(|(block, _)| block as u32)
                         .collect::<Vec<_>>();
-                    state.torrent_state
+                    state
+                        .torrent_state
                         .add_pieces_for_peer(peer_id, pieces_present);
                 }
                 Messages::Request {
@@ -293,7 +303,7 @@ impl <W: TorrentWriter> TorrentProcessor<W> {
                     if let Some(idx) = idx_to_remove_opt {
                         outstanding_requests.remove(idx);
                     }
-                },
+                }
                 Messages::Piece {
                     index,
                     begin,

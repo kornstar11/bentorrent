@@ -7,7 +7,7 @@ pub enum PeerError {
     #[error("Bad Piece Bounds: {0} {1}")]
     BadBounds(usize, usize),
     #[error("Bad Piece Index: {0}")]
-    BadPieceIdx(usize)
+    BadPieceIdx(usize),
 }
 
 impl PeerError {

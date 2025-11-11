@@ -1,9 +1,8 @@
-
 use std::pin::Pin;
 
+use super::error::PeerError;
 use anyhow::Result;
 use futures::FutureExt;
-use super::error::PeerError;
 
 use crate::{model::V1Torrent, peer::PIECE_BLOCK_SIZE};
 
@@ -34,11 +33,7 @@ impl TorrentAllocation {
             blocks_in_last_piece,
         }
     }
-    
 }
-
-
-
 
 pub trait TorrentWriter: Send + Sync {
     //fn write_piece(&'static mut self, index: u32, begin: u32, block: Vec<u8>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + Sync>>;
@@ -87,9 +82,8 @@ impl TorrentWriter for MemoryTorrentWriter {
             }
 
             Ok(())
-        } else{
+        } else {
             Err(PeerError::BadPieceIdx(index as _).into())
         }
     }
 }
-
