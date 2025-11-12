@@ -7,6 +7,7 @@ mod tracker;
 
 pub const PIECE_BLOCK_SIZE: usize = 2 ^ 14;
 
+use reqwest::Client;
 pub use tracker::TrackerClient;
 
 use crate::model::V1Torrent;
@@ -19,6 +20,7 @@ pub struct TorrentAllocation {
     last_piece_size: usize,
     max_blocks_per_piece: usize,
     blocks_in_last_piece: usize,
+
 }
 
 impl TorrentAllocation {
@@ -39,4 +41,11 @@ impl TorrentAllocation {
             blocks_in_last_piece,
         }
     }
+}
+
+pub async fn start_processing(torrent: V1Torrent) {
+    let client = Client::new();
+    let tracker_client = TrackerClient::new(torrent, client);
+    let tracker_response = tracker_client.get_announce().await;
+
 }

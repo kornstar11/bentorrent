@@ -318,6 +318,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
             for req in v.requests_to_make {
                 if let Some(tx) = peer_to_tx.get(&req.peer_id) {
                     let req_msg = Messages::Request { index: req.index, begin: req.begin, length: req.length };
+                    log::debug!("Sending request {:?}", req_msg);
                     if let Err(_) = tx.send(req_msg).await {
                         peers_closed.insert(req.peer_id);
                     }
