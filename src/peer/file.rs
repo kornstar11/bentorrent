@@ -1,39 +1,7 @@
-use std::pin::Pin;
-
 use super::error::PeerError;
 use anyhow::Result;
-use futures::FutureExt;
 
-use crate::{model::V1Torrent, peer::PIECE_BLOCK_SIZE};
-
-#[derive(Debug)]
-pub struct TorrentAllocation {
-    total_pieces: usize,
-    max_piece_size: usize,
-    last_piece_size: usize,
-    max_blocks_per_piece: usize,
-    blocks_in_last_piece: usize,
-}
-
-impl TorrentAllocation {
-    fn allocate_torrent(torrent: &V1Torrent) -> Self {
-        let total_pieces = torrent.info.pieces.len();
-
-        let max_piece_size = torrent.info.length as usize / total_pieces;
-        let last_piece_size = torrent.info.length as usize % total_pieces;
-
-        let max_blocks_per_piece = max_piece_size.div_ceil(PIECE_BLOCK_SIZE);
-        let blocks_in_last_piece = last_piece_size.div_ceil(PIECE_BLOCK_SIZE);
-
-        Self {
-            total_pieces,
-            max_piece_size,
-            last_piece_size,
-            max_blocks_per_piece,
-            blocks_in_last_piece,
-        }
-    }
-}
+use crate::{model::V1Torrent, peer::{TorrentAllocation}};
 
 pub trait TorrentWriter: Send + Sync {
     //fn write_piece(&'static mut self, index: u32, begin: u32, block: Vec<u8>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + Sync>>;
