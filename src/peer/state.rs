@@ -1,4 +1,4 @@
-use crate::model::{TrackerResponse, V1Piece, V1Torrent};
+use crate::model::{V1Piece, V1Torrent};
 use crate::peer::{PIECE_BLOCK_SIZE, TorrentAllocation};
 use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter};
 use crate::peer::writer::TorrentWriter;
@@ -204,12 +204,12 @@ pub struct ProtocolMessage {
 /// bidirectional channels for a single peers connection
 struct PeerStartMessage {
     handshake: Handshake,
-    rx: Receiver<ProtocolMessage>,
+    rx: Receiver<Messages>,
     tx: Sender<Messages>,
 }
 
 impl PeerStartMessage {
-    fn into(self) -> (Handshake, Receiver<ProtocolMessage>, Sender<Messages>) {
+    fn into(self) -> (Handshake, Receiver<Messages>, Sender<Messages>) {
         (self.handshake, self.rx, self.tx)
     }
 }
@@ -257,17 +257,15 @@ impl PieceBlockTracking {
 
 struct TorrentProcessor<W> {
     torrent: V1Torrent,
-    tracker_response: TrackerResponse,
     torrent_state: TorrentState,
     torrent_writer: W,
 }
 
 impl<W: TorrentWriter> TorrentProcessor<W> {
-    pub fn new(torrent: V1Torrent, tracker_response: TrackerResponse, torrent_writer: W) -> Self {
+    pub fn new(torrent: V1Torrent, torrent_writer: W) -> Self {
         let torrent_state = TorrentState::new(&torrent.info.pieces);
         Self {
             torrent,
-            tracker_response,
             torrent_state,
             torrent_writer,
         }
@@ -337,7 +335,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
     /// Maps the result so that we always return the peer_id
     async fn handle_peer_msgs(
         state: Arc<Mutex<Self>>,
-        rx: Receiver<ProtocolMessage>,
+        rx: Receiver<Messages>,
         handshake: Handshake,
     ) -> (PeerId, Result<()>) {
         let peer_id = handshake.peer_ctx.peer_id.clone();
@@ -349,7 +347,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
     /// Handle all incoming state updates from a single peer, and requests
     async fn inner_handle_peer_msgs(
         state: Arc<Mutex<Self>>,
-        mut rx: Receiver<ProtocolMessage>,
+        mut rx: Receiver<Messages>,
         handshake: Handshake,
     ) -> Result<()> {
         log::info!("Starting torrent processing...");
@@ -359,7 +357,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         while let Some(msg) = rx.recv().await {
             let peer_id = Arc::clone(&peer_id);
             let mut state = state.lock().await;
-            match msg.msg {
+            match msg {
                 Messages::KeepAlive => {
                     // TODO reset timer or something, and expire after xx time
                 }
@@ -437,5 +435,86 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::time::Duration;
+
+    use crate::{model::{PeerContext, V1TorrentInfo}, peer::writer::MemoryTorrentWriter};
+    use tokio::{sync::mpsc::channel, task::JoinHandle};
+
+    use super::*;
+
+    fn peer_start_fixture(info_hash: &Vec<u8>) -> (PeerStartMessage, Sender<Messages>, Receiver<Messages>) {
+        let (in_tx, in_rx) = channel(1);
+        let (out_tx, out_rx) = channel(1);
+        let handshake = Handshake{
+            peer_ctx: PeerContext {
+                info_hash: info_hash.clone(),
+                peer_id: vec![10 as u8; 20]
+            }
+        };
+        let peer_start_msg = PeerStartMessage{
+            handshake,
+            rx: in_rx,
+            tx: out_tx,
+        };
+        (peer_start_msg, in_tx, out_rx)
+    }
+
+    fn torrent_fixture(info_hash: Vec<u8>) -> V1Torrent {
+        V1Torrent {
+            info: V1TorrentInfo {
+                length: 10_240_000,
+                name: "test.txt".to_string(),
+                pieces: vec![
+                    V1Piece{hash: vec![11; 20]},
+                    V1Piece{hash: vec![22; 20]},
+                ],
+                info_hash
+            },
+            announce: String::new(),
+            announce_list: vec![]
+        }
+    }
+
+    async fn setup_test() -> (JoinHandle<()>, Sender<Messages>, Receiver<Messages>) {
+        let torrent = torrent_fixture(vec![1 as u8, 20]);
+        let torrent_writer = MemoryTorrentWriter::new(torrent.clone());
+        let processor = TorrentProcessor::new(torrent.clone(), torrent_writer);
+
+        // channel for new connections
+        let (conn_tx, conn_rx) = channel(1);
+        // per peer channels
+        let (peer_start_msg, tx, rx) = peer_start_fixture(&torrent.info.info_hash);
+        conn_tx.send(peer_start_msg)
+            .await
+            .unwrap();
+        let processor_task = tokio::spawn(processor.start(conn_rx));
+
+        (processor_task, tx, rx)
+    }
+
+    async fn wait_rx<M>(mut rx: Receiver<M>, timeout: Duration, expect: usize) -> Vec<M> {
+        let mut buf = vec![];
+        let waiting = rx.recv_many(&mut buf, expect);
+        tokio::select! {
+            _ = tokio::time::sleep(timeout) => panic!("timeout occured, waiting for msgs: expected_count={}", expect),
+            _ = waiting => (),
+        }
+
+        return buf;
+
+    }
+
+    #[tokio::test]
+    async fn on_connection_handshake_and_bitfield_are_sent() {
+        let (handle, msg_tx, msg_rx) = setup_test().await;
+        let msgs = wait_rx(msg_rx, Duration::from_secs(2), 2).await;
+        assert_eq!(msgs.len(), 2);
+
+
     }
 }
