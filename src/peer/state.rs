@@ -1,17 +1,15 @@
-use crate::model::{V1Piece, V1Torrent};
+use crate::model::{TrackerResponse, V1Piece, V1Torrent};
 use crate::peer::{PIECE_BLOCK_SIZE, TorrentAllocation};
 use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter};
-use crate::peer::file::TorrentWriter;
+use crate::peer::writer::TorrentWriter;
 use crate::peer::protocol::{FlagMessages, Handshake};
 use anyhow::Result;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use futures::task::waker;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::oneshot::{Receiver as OReceiver, Sender as OSender};
 
 use super::protocol::Messages;
 
@@ -259,15 +257,17 @@ impl PieceBlockTracking {
 
 struct TorrentProcessor<W> {
     torrent: V1Torrent,
+    tracker_response: TrackerResponse,
     torrent_state: TorrentState,
     torrent_writer: W,
 }
 
 impl<W: TorrentWriter> TorrentProcessor<W> {
-    pub fn new(torrent: V1Torrent, torrent_writer: W) -> Self {
+    pub fn new(torrent: V1Torrent, tracker_response: TrackerResponse, torrent_writer: W) -> Self {
         let torrent_state = TorrentState::new(&torrent.info.pieces);
         Self {
             torrent,
+            tracker_response,
             torrent_state,
             torrent_writer,
         }

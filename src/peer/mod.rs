@@ -1,7 +1,7 @@
 mod bitfield;
-mod connection;
+mod state;
 mod error;
-mod file;
+mod writer;
 mod protocol;
 mod tracker;
 

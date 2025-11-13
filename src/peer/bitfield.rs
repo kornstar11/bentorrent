@@ -1,6 +1,6 @@
 use std::ops::Shr;
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 
 const MASK: u8 = 0b10000000;
 pub struct BitFieldReader {
