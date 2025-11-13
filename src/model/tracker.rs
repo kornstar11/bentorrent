@@ -25,7 +25,7 @@ Dictionary(
 
 */
 
-use std::{collections::BTreeMap, net::IpAddr};
+use std::{collections::BTreeMap, net::IpAddr, str::FromStr};
 
 use anyhow::Context;
 
@@ -36,33 +36,31 @@ pub struct TrackerPeer {
     address: IpAddr,
     port: u32,
 }
-impl TryFrom<Bencode> for TrackerPeer {
+impl<'a> TryFrom<Bencode<'a>> for TrackerPeer {
     type Error = Error;
     
     fn try_from(value: Bencode) -> Result<Self, Self::Error> {
-        if let Some(Bencode::Dictionary(dict)) = value {
-            let dict = map_dict_keys(dict);
+        if let Bencode::Dictionary(dict) = value {
+            let mut dict = map_dict_keys(dict);
             if let (
                 Some(Bencode::ByteString(peer_id)),
                 Some(Bencode::ByteString(ip)),
                 Some(Bencode::Int(port))
             ) = (dict.remove("peer id"), dict.remove("ip"), dict.remove("port")) {
-                let ip: IpAddr = ip.to_string().parse()?;
+                let ip  = ip
+                    .to_string();
+                let ip:IpAddr = IpAddr::from_str(&ip)
+                    .map_err(|err| Error::BencodeParse(err.to_string()))?;
                 return Ok(TrackerPeer { 
                     peer_id: peer_id.elements.to_vec(),
                     address: ip,
                     port: port as _ 
                 })
-
-
             } else {
-                return Err(Error::Missing("missing peerid, ip or port"))
+                return Err(Error::missing("missing peerid, ip or port"))
             }
-            
-            todo!()
-
         } else {
-            Err(Error::WrongType).context("Peers from tracker should be a Dictionary")
+            Err(Error::WrongType)
         }
     }
     
