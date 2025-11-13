@@ -1,36 +1,8 @@
-/*
-Dictionary(
-                    {
-                        ByteString {
-                            elements: "ip",
-                        }: ByteString(
-                            ByteString {
-                                elements: "2001:470:1f06:32b::2",
-                            },
-                        ),
-                        ByteString {
-                            elements: "peer id",
-                        }: ByteString(
-                            ByteString {
-                                elements: "-TR410B-e1q7lgey4yby",
-                            },
-                        ),
-                        ByteString {
-                            elements: "port",
-                        }: Int(
-                            54555,
-                        ),
-                    },
-                ),
-
-*/
-
-use std::{collections::BTreeMap, net::IpAddr, str::FromStr};
-
-use anyhow::Context;
+use std::{net::IpAddr, str::FromStr};
 
 use crate::file::{Bencode, Error, map_dict_keys};
 
+#[derive(Debug, Clone)]
 pub struct TrackerPeer {
     peer_id: Vec<u8>,
     address: IpAddr,
@@ -49,7 +21,7 @@ impl<'a> TryFrom<Bencode<'a>> for TrackerPeer {
             ) = (dict.remove("peer id"), dict.remove("ip"), dict.remove("port")) {
                 let ip  = ip
                     .to_string();
-                let ip:IpAddr = IpAddr::from_str(&ip)
+                let ip  = IpAddr::from_str(&ip)
                     .map_err(|err| Error::BencodeParse(err.to_string()))?;
                 return Ok(TrackerPeer { 
                     peer_id: peer_id.elements.to_vec(),
@@ -64,4 +36,39 @@ impl<'a> TryFrom<Bencode<'a>> for TrackerPeer {
         }
     }
     
+}
+#[derive(Debug, Clone)]
+pub struct TrackerResponse {
+    complete: i64,
+    incomplete: i64,
+    interval: i64,
+    peers: Vec<TrackerPeer>
+}
+
+impl<'a> TryFrom<Bencode<'a>> for TrackerResponse {
+    type Error = Error;
+
+    fn try_from(value: Bencode<'a>) -> Result<Self, Self::Error> {
+        if let Bencode::Dictionary(dict) = value {
+            let mut dict = map_dict_keys(dict);
+            if let (
+                Some(Bencode::Int(complete)),
+                Some(Bencode::Int(incomplete)),
+                Some(Bencode::Int(interval)),
+                Some(Bencode::List(peers)),
+            ) = (dict.remove("complete"), dict.remove("incomplete"), dict.remove("interval"), dict.remove("peers")) {
+                let peers = peers
+                    .into_iter()
+                    .map(|peer| {
+                        TrackerPeer::try_from(peer)
+                    }).flatten()
+                    .collect::<Vec<_>>();
+                Ok(TrackerResponse { complete, incomplete, interval, peers })
+            } else {
+                Err(Error::WrongType)
+            }
+        } else {
+            Err(Error::WrongType)
+        }
+    }
 }
