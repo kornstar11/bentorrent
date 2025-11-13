@@ -287,7 +287,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                 }
                 Some((peer_id, res)) = handle_peer_requests_fq.next() => {
                     peer_to_tx.remove(&peer_id);
-                    log::info!("Peer: {} finished {:?}", hex::encode(peer_id), res);
+                    log::info!("Peer: {} closed {:?}", hex::encode(peer_id), res);
                     ()
                 }
                 else => break,
