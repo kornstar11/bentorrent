@@ -1,14 +1,16 @@
-use crate::model::{V1Piece, V1Torrent};
+use crate::model::{PeerContext, V1Piece, V1Torrent};
 use crate::peer::{PIECE_BLOCK_SIZE, TorrentAllocation};
-use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter};
+use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter, BitFieldWriter};
 use crate::peer::writer::TorrentWriter;
 use crate::peer::protocol::{FlagMessages, Handshake};
 use anyhow::Result;
+use bytes::BytesMut;
 use futures::StreamExt;
+use futures::channel::oneshot::channel;
 use futures::stream::FuturesUnordered;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use super::protocol::Messages;
@@ -155,6 +157,8 @@ impl TorrentState {
         }
     }
 
+    ///
+    /// If peer send bitfield or has message then call this, returns "interest"
     pub fn add_pieces_for_peer(&mut self, peer_id: InternalPeerId, pieces: Vec<u32>) {
         self.add_peer_id(Arc::clone(&peer_id));
         for piece in pieces {
@@ -256,15 +260,17 @@ impl PieceBlockTracking {
 
 
 struct TorrentProcessor<W> {
+    our_id: Vec<u8>,
     torrent: V1Torrent,
     torrent_state: TorrentState,
     torrent_writer: W,
 }
 
 impl<W: TorrentWriter> TorrentProcessor<W> {
-    pub fn new(torrent: V1Torrent, torrent_writer: W) -> Self {
+    pub fn new(our_id: Vec<u8>, torrent: V1Torrent, torrent_writer: W) -> Self {
         let torrent_state = TorrentState::new(&torrent.info.pieces);
         Self {
+            our_id,
             torrent,
             torrent_state,
             torrent_writer,
@@ -279,9 +285,14 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         loop {
             tokio::select! {
                 Some(new) = rx.recv() => {
-                    let (handshake, rx, tx) = new.into();
-                    peer_to_tx.insert(Arc::new(handshake.peer_ctx.peer_id.clone()), tx);
-                    handle_peer_requests_fq.push(Self::handle_peer_msgs(Arc::clone(&state), rx, handshake));
+                    let (handshake, rx, mut tx) = new.into();
+                    // send peer back state needed, pieces we have and the choke, interested
+                    if let Ok(_) = Self::init_connection(Arc::clone(&state), &mut tx).await {
+                        peer_to_tx.insert(Arc::new(handshake.peer_ctx.peer_id.clone()), tx);
+                        handle_peer_requests_fq.push(Self::handle_peer_msgs(Arc::clone(&state), rx, handshake));
+                    } else {
+                        log::warn!("Unable to initialize connection {:?}", handshake);
+                    }
                 }
                 Some((peer_id, res)) = handle_peer_requests_fq.next() => {
                     peer_to_tx.remove(&peer_id);
@@ -293,6 +304,17 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
 
             Self::compute_requests(Arc::clone(&state), &mut peer_to_tx).await;
         }
+    }
+    ///
+    /// Send out the initial bitfield message to inform the peer of our peices
+    async fn init_connection(state: Arc<Mutex<Self>>, tx: &mut Sender<Messages>) -> Result<()> {
+        let state = state.lock().await;
+        let mut bitfield = BitFieldWriter::new(BytesMut::new());
+        bitfield.put_bit_set(&state.torrent_state.pieces_finished, state.torrent.info.pieces.len());
+        let bitfield = Messages::BitField { bitfield: bitfield.into().to_vec() };
+        tx.send(bitfield).await?;
+
+        Ok(())
     }
 
     async fn compute_requests(state: Arc<Mutex<Self>>, peer_to_tx: &mut PeerToSender) {
@@ -483,7 +505,7 @@ mod test {
     async fn setup_test() -> (JoinHandle<()>, Sender<Messages>, Receiver<Messages>) {
         let torrent = torrent_fixture(vec![1 as u8, 20]);
         let torrent_writer = MemoryTorrentWriter::new(torrent.clone());
-        let processor = TorrentProcessor::new(torrent.clone(), torrent_writer);
+        let processor = TorrentProcessor::new(vec![1,2,3], torrent.clone(), torrent_writer);
 
         // channel for new connections
         let (conn_tx, conn_rx) = channel(1);
@@ -501,7 +523,7 @@ mod test {
         let mut buf = vec![];
         let waiting = rx.recv_many(&mut buf, expect);
         tokio::select! {
-            _ = tokio::time::sleep(timeout) => panic!("timeout occured, waiting for msgs: expected_count={}", expect),
+            _ = tokio::time::sleep(timeout) => panic!("timeout occured, waiting for msgs: expected_count={}, was={}", expect, buf.len()),
             _ = waiting => (),
         }
 
@@ -514,7 +536,5 @@ mod test {
         let (handle, msg_tx, msg_rx) = setup_test().await;
         let msgs = wait_rx(msg_rx, Duration::from_secs(2), 2).await;
         assert_eq!(msgs.len(), 2);
-
-
     }
 }

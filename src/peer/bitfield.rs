@@ -1,4 +1,4 @@
-use std::ops::Shr;
+use std::{collections::HashSet, ops::Shr};
 
 use bytes::{BufMut, Bytes, BytesMut};
 
@@ -58,7 +58,7 @@ impl Iterator for BitFieldReaderIter {
     }
 }
 
-struct BitFieldWriter {
+pub struct BitFieldWriter {
     bytes: BytesMut,
     bits_written: u32,
 }
@@ -89,6 +89,12 @@ impl BitFieldWriter {
             self.bytes[last_byte_pos] = last_byte;
         }
         self.bits_written += 1;
+    }
+
+    pub fn put_bit_set(&mut self, bits: &HashSet<u32>, length: usize) {
+        for i in 0..length as u32 {
+            self.put_bit(bits.contains(&i));
+        }
     }
 }
 
