@@ -83,6 +83,18 @@ pub enum FlagMessages {
     NotInterested = 3,
 }
 
+impl FlagMessages {
+    pub fn interest_msg(interest: bool) -> Messages {
+        let msg = if interest {
+            FlagMessages::Interested
+        } else {
+            FlagMessages::NotInterested
+        };
+        Messages::Flag(msg)
+    }
+    
+}
+
 impl TryFrom<u8> for FlagMessages {
     type Error = ProtocolError;
 
