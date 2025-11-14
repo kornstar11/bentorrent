@@ -286,6 +286,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
             tokio::select! {
                 Some(new) = rx.recv() => {
                     let (handshake, rx, mut tx) = new.into();
+                    log::info!("Accepting peer {}", hex::encode(&handshake.peer_ctx.peer_id));
                     // send peer back state needed, pieces we have and the choke, interested
                     if let Ok(_) = Self::init_connection(Arc::clone(&state), &mut tx).await {
                         peer_to_tx.insert(Arc::new(handshake.peer_ctx.peer_id.clone()), tx);
@@ -313,6 +314,10 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         bitfield.put_bit_set(&state.torrent_state.pieces_finished, state.torrent.info.pieces.len());
         let bitfield = Messages::BitField { bitfield: bitfield.into().to_vec() };
         tx.send(bitfield).await?;
+        // we always are sending choked and uninterested to start
+        tx.send(Messages::Flag(FlagMessages::Choke)).await?;
+        tx.send(Messages::Flag(FlagMessages::NotInterested)).await?;
+
 
         Ok(())
     }
@@ -406,6 +411,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                         .filter(|(_, was_set)| *was_set)
                         .map(|(block, _)| block as u32)
                         .collect::<Vec<_>>();
+                    log::info!("peer_id={}, has={:?}", hex::encode(peer_id.as_ref()), pieces_present);
                     state
                         .torrent_state
                         .add_pieces_for_peer(peer_id, pieces_present);
@@ -520,21 +526,46 @@ mod test {
     }
 
     async fn wait_rx<M>(mut rx: Receiver<M>, timeout: Duration, expect: usize) -> Vec<M> {
-        let mut buf = vec![];
-        let waiting = rx.recv_many(&mut buf, expect);
+        let mut buf = Vec::with_capacity(expect);
+        //let waiting = rx.recv_many(&mut buf, expect);
+        let waiting = async {
+            while let Some(m) = rx.recv().await {
+                buf.push(m);
+                if buf.len() >= expect {
+                    break;
+                }
+            }
+        };
         tokio::select! {
-            _ = tokio::time::sleep(timeout) => panic!("timeout occured, waiting for msgs: expected_count={}, was={}", expect, buf.len()),
+            _ = tokio::time::sleep(timeout) => {
+                if expect != 0 {
+                    panic!("timeout occured, waiting for msgs: expected_count={}, was={}", expect, buf.len());
+                } else {
+                    return vec![];
+                }
+            },
             _ = waiting => (),
         }
 
         return buf;
-
     }
 
     #[tokio::test]
-    async fn on_connection_handshake_and_bitfield_are_sent() {
+    async fn on_connection_bitfield_and_choke_are_sent() {
+        env_logger::init();
         let (handle, msg_tx, msg_rx) = setup_test().await;
-        let msgs = wait_rx(msg_rx, Duration::from_secs(2), 2).await;
-        assert_eq!(msgs.len(), 2);
+        let msgs = wait_rx(msg_rx, Duration::from_secs(2), 3).await;
+        // initial message
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs, vec![Messages::BitField { bitfield: vec![0] }, Messages::Flag(FlagMessages::Choke), Messages::Flag(FlagMessages::NotInterested)]);
+        // peer messages
+        let mut all_pieces_bf = BitFieldWriter::new(BytesMut::new());
+        all_pieces_bf.put_bit(true);
+        all_pieces_bf.put_bit(true);
+        let all_pieces_bf = all_pieces_bf.into().to_vec();
+        msg_tx.send(Messages::BitField { bitfield: all_pieces_bf }).await.unwrap();
+        msg_tx.send(Messages::Flag(FlagMessages::Choke)).await.unwrap();
+        msg_tx.send(Messages::Flag(FlagMessages::NotInterested)).await.unwrap();
+
     }
 }

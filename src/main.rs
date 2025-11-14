@@ -3,6 +3,7 @@ use std::fs::read;
 use bentorrent::{model::V1Torrent, peer::TrackerClient};
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    env_logger::init();
     let torrent = read("./test_data/ubuntu-25.10-desktop-amd64.iso.torrent").unwrap();
     match bentorrent::file::parse_bencode(&torrent) {
         Ok(parsed) => {
