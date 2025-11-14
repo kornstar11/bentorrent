@@ -84,17 +84,26 @@ impl PeerPieceMap {
         }
     }
 }
+///
+/// 
+#[derive(Debug, Default)]
+struct InternalPeerState {
+    choked: bool,
+    interested: bool,
+}
 
 #[derive(Debug, Default)]
 struct TorrentState {
     peers: HashSet<InternalPeerId>,
-    peers_interested: HashSet<InternalPeerId>,
-    peers_not_choking: HashSet<InternalPeerId>,
+    peers_interested: HashSet<InternalPeerId>, // external -> us
+    peers_not_choking: HashSet<InternalPeerId>, //external -> us
     block_peer_map: PeerPieceMap,
     /// piece tracking
     pieces_not_started: HashSet<u32>,
     pieces_started: HashSet<u32>,
     pieces_finished: HashSet<u32>,
+    //
+    internal_peer_state: HashMap<InternalPeerId, InternalPeerState>
 }
 
 impl TorrentState {
@@ -176,10 +185,20 @@ impl TorrentState {
         }
         let interest = !self.block_peer_map.peer_interest(&peer_id, &self.pieces_not_started).is_empty();
         if prev_interest != interest {
+            (*self
+                .internal_peer_state
+                .entry(Arc::clone(&peer_id))
+                .or_insert_with(|| InternalPeerState::default())).interested = interest;
             Some(interest)
         } else {
             None
         }
+    }
+
+    ///
+    /// Our view on the peers conencted to use
+    pub fn get_internal_peer_state(&self, peer_id: &InternalPeerId) -> Option<&InternalPeerState> {
+        self.internal_peer_state.get(peer_id)
     }
 
     pub fn set_pieces_started(&mut self, pieces: HashSet<u32>) {
@@ -209,6 +228,7 @@ impl TorrentState {
         self.peers_interested.remove(&peer_id);
         self.peers_not_choking.remove(&peer_id);
         self.block_peer_map.remove_peer(&peer_id);
+        self.internal_peer_state.remove(&peer_id);
 
         return Arc::into_inner(peer_id);
     }
@@ -453,6 +473,15 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                     begin,
                     length,
                 } => {
+                    let choked = state
+                        .torrent_state
+                        .get_internal_peer_state(&peer_id).map(|peer_state| peer_state.choked)
+                        .unwrap_or(true);
+                    if choked {
+                        log::info!("Request is being ignored because it is choked [peer_id={} ", hex::encode(peer_id.as_ref()));
+                        continue;
+                    }
+
                     outstanding_requests.push(PeerRequestedPiece {
                         peer_id,
                         index,
