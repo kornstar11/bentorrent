@@ -5,12 +5,17 @@ mod writer;
 mod protocol;
 mod tracker;
 
-pub const PIECE_BLOCK_SIZE: usize = 2 ^ 14;
+
+use std::sync::Arc;
 
 use reqwest::Client;
 pub use tracker::TrackerClient;
 
 use crate::model::V1Torrent;
+
+pub type PeerId = Vec<u8>;
+pub type InternalPeerId = Arc<PeerId>;
+pub const PIECE_BLOCK_SIZE: usize = 2 ^ 14;
 
 
 #[derive(Debug)]
@@ -48,4 +53,26 @@ pub async fn start_processing(torrent: V1Torrent) {
     let tracker_client = TrackerClient::new(torrent, client);
     let tracker_response = tracker_client.get_announce().await;
 
+}
+
+
+#[cfg(test)]
+mod test {
+    use crate::model::{V1Piece, V1Torrent, V1TorrentInfo};
+
+    pub fn torrent_fixture(info_hash: Vec<u8>) -> V1Torrent {
+        V1Torrent {
+            info: V1TorrentInfo {
+                length: 10_240_000,
+                name: "test.txt".to_string(),
+                pieces: vec![
+                    V1Piece{hash: vec![11; 20]},
+                    V1Piece{hash: vec![22; 20]},
+                ],
+                info_hash
+            },
+            announce: String::new(),
+            announce_list: vec![]
+        }
+    }
 }

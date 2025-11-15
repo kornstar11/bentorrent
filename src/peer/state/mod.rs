@@ -1,22 +1,22 @@
-use crate::model::{PeerContext, V1Piece, V1Torrent};
-use crate::peer::{PIECE_BLOCK_SIZE, TorrentAllocation};
+mod request;
+use crate::model::{V1Piece, V1Torrent};
+use crate::peer::state::request::{PeerRequestedPiece, PieceBlockTracking};
+use crate::peer::{InternalPeerId, PeerId, PIECE_BLOCK_SIZE, TorrentAllocation};
 use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter, BitFieldWriter};
 use crate::peer::writer::TorrentWriter;
 use crate::peer::protocol::{FlagMessages, Handshake};
 use anyhow::Result;
 use bytes::BytesMut;
 use futures::StreamExt;
-use futures::channel::oneshot::channel;
 use futures::stream::FuturesUnordered;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{Mutex, mpsc};
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use super::protocol::Messages;
 
-type PeerId = Vec<u8>;
-type InternalPeerId = Arc<PeerId>;
 type PeerToSender = HashMap<InternalPeerId, Sender<Messages>>;
 
 const MAX_OUTSTANDING_REQUESTS: usize = 4;
@@ -252,47 +252,6 @@ impl PeerStartMessage {
     }
 }
 
-struct PeerRequestedPiece {
-    peer_id: InternalPeerId,
-    index: u32,
-    begin: u32,
-    length: u32,
-}
-
-struct PieceBlockTracking {
-    requests_to_make: Vec<PeerRequestedPiece>,
-}
-
-impl PieceBlockTracking {
-    pub fn new(piece_id: u32, torrent: &V1Torrent, peer_ids: HashSet<InternalPeerId>) -> Option<Self> {
-        if let Some(peer_id) = peer_ids.iter().next() {
-            let mut requests_to_make = vec![];
-            let allocation = TorrentAllocation::allocate_torrent(torrent);
-            let piece_size = if piece_id == (torrent.info.pieces.len() - 1) as u32 {
-                allocation.last_piece_size
-            } else {
-                allocation.max_piece_size
-            };
-            for begin in (0..piece_size).step_by(PIECE_BLOCK_SIZE) {
-                let length = PIECE_BLOCK_SIZE;
-                requests_to_make.push(PeerRequestedPiece{
-                    peer_id: Arc::clone(&peer_id),
-                    index: piece_id,
-                    begin: begin as _,
-                    length: length as _,
-
-                });
-            }
-            Some(Self {
-                requests_to_make
-            })
-        } else {
-            None
-        }
-    }
-}
-
-
 struct TorrentProcessor<W> {
     our_id: Vec<u8>,
     torrent: V1Torrent,
@@ -334,6 +293,10 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                     log::info!("Peer: {} closed {:?}", hex::encode(peer_id), res);
                     ()
                 }
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                    log::debug!("Wake up...");
+                    // we wake up here so that we occasionally complete the loop, and compute the requests
+                }
                 else => break,
             }
 
@@ -359,6 +322,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
     /// Compute peers with pieces we want, and that are willing to share. Then begin to dispatch requests to them
     async fn compute_requests(state: Arc<Mutex<Self>>, peer_to_tx: &mut PeerToSender) {
         let mut state = state.lock().await;
+        log::debug!("Computing peer requests {:?}", state.torrent_state);
         let torrent = state.torrent.clone();
         let block_to_request_tracker = state
             .torrent_state
@@ -370,6 +334,8 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                 tracker_opt.map(|t| (p, t))
             }).take(MAX_OUTSTANDING_REQUESTS)
             .collect::<HashMap<_, _>>();
+
+        log::debug!("Block to req tracker: {:?}", block_to_request_tracker);
 
         let mut peers_closed = HashSet::new();
 
@@ -532,6 +498,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
 #[cfg(test)]
 mod test {
     use std::time::Duration;
+    use crate::peer::test::torrent_fixture;
 
     use crate::{model::{PeerContext, V1TorrentInfo}, peer::writer::MemoryTorrentWriter};
     use tokio::{sync::mpsc::channel, task::JoinHandle};
@@ -553,22 +520,6 @@ mod test {
             tx: out_tx,
         };
         (peer_start_msg, in_tx, out_rx)
-    }
-
-    fn torrent_fixture(info_hash: Vec<u8>) -> V1Torrent {
-        V1Torrent {
-            info: V1TorrentInfo {
-                length: 10_240_000,
-                name: "test.txt".to_string(),
-                pieces: vec![
-                    V1Piece{hash: vec![11; 20]},
-                    V1Piece{hash: vec![22; 20]},
-                ],
-                info_hash
-            },
-            announce: String::new(),
-            announce_list: vec![]
-        }
     }
 
     async fn setup_test() -> (JoinHandle<()>, Sender<Messages>, Receiver<Messages>) {
@@ -638,5 +589,17 @@ mod test {
         //expect interest since pieces are not our own
         let msgs = wait_rx(&mut msg_rx, Duration::from_secs(2), 1).await;
         assert_eq!(msgs, vec![Messages::Flag(FlagMessages::Interested)]);
+
+        // wait a bit, and expect no requests, since the peer is choking us
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let msgs = wait_rx(&mut msg_rx, Duration::from_secs(3), 0).await;
+        assert!(msgs.is_empty());
+
+        // send a unchoked messages
+        msg_tx.send(Messages::Flag(FlagMessages::Unchoke)).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let msgs = wait_rx(&mut msg_rx, Duration::from_secs(3), 2).await;
+
+        println!("Requests: {:?}", msgs);
     }
 }
