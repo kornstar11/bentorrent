@@ -15,7 +15,7 @@ use crate::model::V1Torrent;
 
 pub type PeerId = Vec<u8>;
 pub type InternalPeerId = Arc<PeerId>;
-pub const PIECE_BLOCK_SIZE: usize = 2 ^ 14;
+pub const PIECE_BLOCK_SIZE: usize = 16_384;
 
 
 #[derive(Debug)]
@@ -33,7 +33,7 @@ impl TorrentAllocation {
         let total_pieces = torrent.info.pieces.len();
 
         let max_piece_size = torrent.info.length as usize / total_pieces;
-        let last_piece_size = torrent.info.length as usize % total_pieces;
+        let last_piece_size = torrent.info.length as usize - ((total_pieces -1) * max_piece_size);//torrent.info.length as usize % total_pieces;
 
         let max_blocks_per_piece = max_piece_size.div_ceil(PIECE_BLOCK_SIZE);
         let blocks_in_last_piece = last_piece_size.div_ceil(PIECE_BLOCK_SIZE);

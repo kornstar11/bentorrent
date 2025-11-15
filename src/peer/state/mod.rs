@@ -500,7 +500,7 @@ mod test {
     use std::time::Duration;
     use crate::peer::test::torrent_fixture;
 
-    use crate::{model::{PeerContext, V1TorrentInfo}, peer::writer::MemoryTorrentWriter};
+    use crate::{model::{PeerContext}, peer::writer::MemoryTorrentWriter};
     use tokio::{sync::mpsc::channel, task::JoinHandle};
 
     use super::*;
