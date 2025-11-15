@@ -304,19 +304,6 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         }
         log::info!("Closing main state loop...")
     }
-    ///
-    /// Send out the initial bitfield message to inform the peer of our peices
-    async fn init_connection(state: Arc<Mutex<Self>>, tx: &mut Sender<Messages>) -> Result<()> {
-        let state = state.lock().await;
-        let mut bitfield = BitFieldWriter::new(BytesMut::new());
-        bitfield.put_bit_set(&state.torrent_state.pieces_finished, state.torrent.info.pieces.len());
-        let bitfield = Messages::BitField { bitfield: bitfield.into().to_vec() };
-        tx.send(bitfield).await?;
-        // we always are sending choked and uninterested to start
-        tx.send(Messages::Flag(FlagMessages::Choke)).await?;
-        tx.send(Messages::Flag(FlagMessages::NotInterested)).await?;
-        Ok(())
-    }
 
     ///
     /// Compute peers with pieces we want, and that are willing to share. Then begin to dispatch requests to them
@@ -335,8 +322,6 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
             }).take(MAX_OUTSTANDING_REQUESTS)
             .collect::<HashMap<_, _>>();
 
-        log::debug!("Block to req tracker: {:?}", block_to_request_tracker);
-
         let mut peers_closed = HashSet::new();
 
         for (piece_id, tracker) in block_to_request_tracker.into_iter() {
@@ -345,9 +330,9 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                 .torrent_state
                 .set_piece_started(piece_id);
             for req in tracker.requests_to_make {
+                log::trace!("Attempting to send request {:?}", req);
                 if let Some(tx) = peer_to_tx.get(&req.peer_id) {
                     let req_msg = Messages::Request { index: req.index, begin: req.begin, length: req.length };
-                    log::debug!("Sending request {:?}", req_msg);
                     if let Err(_) = tx.send(req_msg).await {
                         peers_closed.insert(req.peer_id);
                     }
@@ -360,6 +345,20 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         for peer_closed in peers_closed.into_iter() {
             peer_to_tx.remove(&peer_closed);
         }
+    }
+
+    ///
+    /// Send out the initial bitfield message to inform the peer of our peices
+    async fn init_connection(state: Arc<Mutex<Self>>, tx: &mut Sender<Messages>) -> Result<()> {
+        let state = state.lock().await;
+        let mut bitfield = BitFieldWriter::new(BytesMut::new());
+        bitfield.put_bit_set(&state.torrent_state.pieces_finished, state.torrent.info.pieces.len());
+        let bitfield = Messages::BitField { bitfield: bitfield.into().to_vec() };
+        tx.send(bitfield).await?;
+        // we always are sending choked and uninterested to start
+        tx.send(Messages::Flag(FlagMessages::Choke)).await?;
+        tx.send(Messages::Flag(FlagMessages::NotInterested)).await?;
+        Ok(())
     }
 
     ///
@@ -598,8 +597,8 @@ mod test {
         // send a unchoked messages
         msg_tx.send(Messages::Flag(FlagMessages::Unchoke)).await.unwrap();
         tokio::time::sleep(Duration::from_secs(5)).await;
-        let msgs = wait_rx(&mut msg_rx, Duration::from_secs(3), 2).await;
-
-        println!("Requests: {:?}", msgs);
+        let expected = (10_240_000 / 16384) + 1;
+        let msgs = wait_rx(&mut msg_rx, Duration::from_secs(1), expected).await;
+        assert_eq!(msgs.len(), expected);
     }
 }

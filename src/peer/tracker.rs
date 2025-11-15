@@ -1,13 +1,13 @@
 use std::{
-    sync::{Arc, atomic::AtomicUsize},
+    sync::{Arc, atomic::{AtomicUsize, Ordering}},
     time::SystemTime,
 };
+use anyhow::Result;
 
 use reqwest::Client;
-use sha1::Digest;
 use url::Url;
 
-use crate::{file::parse_bencode, model::{TrackerResponse, V1Torrent}};
+use crate::{file::parse_bencode, model::{TrackerResponse, V1Torrent}, peer::{InternalPeerId, make_peer_id}};
 
 pub struct UploadDownloadState {
     uploaded: Arc<AtomicUsize>,
@@ -21,53 +21,49 @@ impl UploadDownloadState {
             downloaded: Arc::new(AtomicUsize::new(0)),
         }
     }
+
+    pub fn get_downloaded(&self) -> usize {
+        self.downloaded.load(Ordering::Relaxed)
+    }
+    pub fn get_uploaded(&self) -> usize {
+        self.uploaded.load(Ordering::Relaxed)
+    }
 }
 
 pub struct TrackerClient {
     torrent: V1Torrent,
-    peer_id: Vec<u8>,
+    my_peer_id: InternalPeerId,
     client: Client,
     pub upload_download_state: UploadDownloadState,
 }
 
 impl TrackerClient {
-    pub fn new(torrent: V1Torrent, client: Client) -> Self {
-        let peer_id = Self::make_peer_id();
+    pub fn new(torrent: V1Torrent, client: Client, my_peer_id: InternalPeerId) -> Self {
         Self {
             torrent,
-            peer_id,
+            my_peer_id,
             client,
             upload_download_state: UploadDownloadState::new(),
         }
     }
 
-    pub async fn get_announce(&self) {
+    pub async fn get_announce(&self) -> Result<TrackerResponse> {
         let url = self.tracker_url();
-        let res = self.client.get(url).send().await.unwrap();
-        let text = res.bytes().await.unwrap();
-        let decoded = parse_bencode(&text).unwrap();
-        let decoded = TrackerResponse::try_from(decoded).unwrap();
-        println!("{:#?}", decoded);
-    }
-
-    fn make_peer_id() -> Vec<u8> {
-        let mut sha1 = sha1::Sha1::new();
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap();
-        let id = format!("ben-{}", timestamp.as_secs());
-        sha1.update(id);
-        return sha1.finalize().to_vec();
+        let res = self.client.get(url).send().await?;
+        let text = res.bytes().await?;
+        let decoded = parse_bencode(&text)?;
+        let decoded = TrackerResponse::try_from(decoded)?;
+        Ok(decoded)
     }
 
     fn tracker_url(&self) -> String {
         let info_hash = urlencoding::encode_binary(&self.torrent.info.info_hash).to_string();
-        let peer_id = urlencoding::encode_binary(&self.peer_id).to_string();
+        let peer_id = urlencoding::encode_binary(&self.my_peer_id).to_string();
         let mut url = Url::parse(&self.torrent.announce).unwrap();
         url.query_pairs_mut()
             .append_pair("port", "6881")
-            .append_pair("uploaded", "0")
-            .append_pair("downloaded", "0")
+            .append_pair("uploaded", &format!("{}", self.upload_download_state.get_uploaded()))
+            .append_pair("downloaded", &format!("{}", self.upload_download_state.get_downloaded()))
             .append_pair("left", &self.torrent.info.length.to_string())
             .finish();
 

@@ -9,8 +9,8 @@ async fn main() {
         Ok(parsed) => {
             let torrent = V1Torrent::try_from(parsed).unwrap();
             let client = reqwest::Client::new();
-            let tracker_client = TrackerClient::new(torrent, client);
-            tracker_client.get_announce().await;
+            //let tracker_client = TrackerClient::new(torrent, client);
+            //tracker_client.get_announce().await;
         }
         Err(e) => {
             eprintln!("Missing: {:?}", e);

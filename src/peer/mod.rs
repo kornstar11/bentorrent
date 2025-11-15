@@ -6,7 +6,8 @@ mod protocol;
 mod tracker;
 
 
-use std::sync::Arc;
+use std::{sync::Arc, time::SystemTime};
+use sha1::Digest;
 
 use reqwest::Client;
 pub use tracker::TrackerClient;
@@ -15,6 +16,7 @@ use crate::model::V1Torrent;
 
 pub type PeerId = Vec<u8>;
 pub type InternalPeerId = Arc<PeerId>;
+
 pub const PIECE_BLOCK_SIZE: usize = 16_384;
 
 
@@ -48,9 +50,22 @@ impl TorrentAllocation {
     }
 }
 
+pub fn make_peer_id() -> InternalPeerId {
+    let mut sha1 = sha1::Sha1::new();
+    let timestamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap();
+    let id = format!("ben-{}", timestamp.as_secs());
+    sha1.update(id);
+    return Arc::new(sha1.finalize().to_vec());
+}
+
 pub async fn start_processing(torrent: V1Torrent) {
     let client = Client::new();
-    let tracker_client = TrackerClient::new(torrent, client);
+    let my_peer_id = make_peer_id();
+    log::info!("My peerid: {}", hex::encode(my_peer_id.as_ref()));
+
+    let tracker_client = TrackerClient::new(torrent, client, my_peer_id);
     let tracker_response = tracker_client.get_announce().await;
 
 }

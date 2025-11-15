@@ -26,7 +26,6 @@ impl PieceBlockTracking {
             } else {
                 allocation.max_piece_size
             };
-            println!("Allocatoion: {:?}", allocation);
             for begin in (0..piece_size).step_by(PIECE_BLOCK_SIZE) {
                 let mut length = PIECE_BLOCK_SIZE;
                 if begin + length > piece_size {
