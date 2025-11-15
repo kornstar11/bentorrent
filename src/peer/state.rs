@@ -201,11 +201,9 @@ impl TorrentState {
         self.internal_peer_state.get(peer_id)
     }
 
-    pub fn set_pieces_started(&mut self, pieces: HashSet<u32>) {
-        self.pieces_not_started = self.pieces_not_started
-            .difference(&pieces)
-            .map(|piece| *piece)
-            .collect::<HashSet<_>>()
+    pub fn set_piece_started(&mut self, piece_id: u32) {
+            self.pieces_not_started.remove(&piece_id);
+            self.pieces_started.insert(piece_id);
     }
 
     pub fn peer_willing_to_upload_pieces(&mut self) -> HashMap<u32, HashSet<InternalPeerId>> {
@@ -341,6 +339,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
 
             Self::compute_requests(Arc::clone(&state), &mut peer_to_tx).await;
         }
+        log::info!("Closing main state loop...")
     }
     ///
     /// Send out the initial bitfield message to inform the peer of our peices
@@ -353,11 +352,11 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         // we always are sending choked and uninterested to start
         tx.send(Messages::Flag(FlagMessages::Choke)).await?;
         tx.send(Messages::Flag(FlagMessages::NotInterested)).await?;
-
-
         Ok(())
     }
 
+    ///
+    /// Compute peers with pieces we want, and that are willing to share. Then begin to dispatch requests to them
     async fn compute_requests(state: Arc<Mutex<Self>>, peer_to_tx: &mut PeerToSender) {
         let mut state = state.lock().await;
         let torrent = state.torrent.clone();
@@ -374,9 +373,12 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
 
         let mut peers_closed = HashSet::new();
 
-        for (k, v) in block_to_request_tracker.into_iter() {
-            log::debug!("Dispatch request for piece_id {}", k);
-            for req in v.requests_to_make {
+        for (piece_id, tracker) in block_to_request_tracker.into_iter() {
+            log::debug!("Dispatch request for piece_id {}", piece_id);
+            state
+                .torrent_state
+                .set_piece_started(piece_id);
+            for req in tracker.requests_to_make {
                 if let Some(tx) = peer_to_tx.get(&req.peer_id) {
                     let req_msg = Messages::Request { index: req.index, begin: req.begin, length: req.length };
                     log::debug!("Sending request {:?}", req_msg);
@@ -618,7 +620,11 @@ mod test {
         let msgs = wait_rx(&mut msg_rx, Duration::from_secs(2), 3).await;
         // initial message
         assert_eq!(msgs.len(), 3);
-        assert_eq!(msgs, vec![Messages::BitField { bitfield: vec![0] }, Messages::Flag(FlagMessages::Choke), Messages::Flag(FlagMessages::NotInterested)]);
+        assert_eq!(msgs, vec![
+            Messages::BitField { bitfield: vec![0] }, 
+            Messages::Flag(FlagMessages::Choke), 
+            Messages::Flag(FlagMessages::NotInterested)
+        ]);
 
         // peer messages
         let mut all_pieces_bf = BitFieldWriter::new(BytesMut::new());
@@ -630,10 +636,7 @@ mod test {
         msg_tx.send(Messages::Flag(FlagMessages::NotInterested)).await.unwrap();
 
         //expect interest since pieces are not our own
-
         let msgs = wait_rx(&mut msg_rx, Duration::from_secs(2), 1).await;
         assert_eq!(msgs, vec![Messages::Flag(FlagMessages::Interested)]);
-
-
     }
 }
