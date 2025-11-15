@@ -4,15 +4,16 @@ mod error;
 mod writer;
 mod protocol;
 mod tracker;
+mod net;
 
-
+use anyhow::Result;
 use std::{sync::Arc, time::SystemTime};
 use sha1::Digest;
 
 use reqwest::Client;
 pub use tracker::TrackerClient;
 
-use crate::model::V1Torrent;
+use crate::{model::V1Torrent, peer::{state::TorrentProcessor, writer::MemoryTorrentWriter}};
 
 pub type PeerId = Vec<u8>;
 pub type InternalPeerId = Arc<PeerId>;
@@ -60,13 +61,32 @@ pub fn make_peer_id() -> InternalPeerId {
     return Arc::new(sha1.finalize().to_vec());
 }
 
-pub async fn start_processing(torrent: V1Torrent) {
+pub async fn start_processing(torrent: V1Torrent) -> Result<()> {
     let client = Client::new();
-    let my_peer_id = make_peer_id();
-    log::info!("My peerid: {}", hex::encode(my_peer_id.as_ref()));
+    let our_id = make_peer_id();
+    log::info!("My peerid: {}", hex::encode(our_id.as_ref()));
 
-    let tracker_client = TrackerClient::new(torrent, client, my_peer_id);
-    let tracker_response = tracker_client.get_announce().await;
+    let (conn_tx, conn_rx) = tokio::sync::mpsc::channel(1);
+
+    let torrent_writer = MemoryTorrentWriter::new(torrent.clone());
+    let torrent_processor = TorrentProcessor::new(Arc::clone(&our_id), torrent.clone(), torrent_writer);
+
+    let torrent_processor_task = tokio::spawn(async move {
+        torrent_processor.start(conn_rx)
+    });
+
+    let tracker_client = TrackerClient::new(torrent, client, our_id);
+    let tracker_response = tracker_client.get_announce().await?;
+    log::info!("Tracker responds:  peers_availiable={}", tracker_response.peers.len());
+
+    tokio::select! {
+        _ = torrent_processor_task => {
+            log::info!("Torrent processor done...");
+        }
+
+    }
+
+    Ok(())
 
 }
 

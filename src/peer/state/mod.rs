@@ -240,7 +240,7 @@ pub struct ProtocolMessage {
 
 ///
 /// bidirectional channels for a single peers connection
-struct PeerStartMessage {
+pub struct PeerStartMessage {
     handshake: Handshake,
     rx: Receiver<Messages>,
     tx: Sender<Messages>,
@@ -252,15 +252,15 @@ impl PeerStartMessage {
     }
 }
 
-struct TorrentProcessor<W> {
-    our_id: Vec<u8>,
+pub struct TorrentProcessor<W> {
+    our_id: InternalPeerId,
     torrent: V1Torrent,
     torrent_state: TorrentState,
     torrent_writer: W,
 }
 
 impl<W: TorrentWriter> TorrentProcessor<W> {
-    pub fn new(our_id: Vec<u8>, torrent: V1Torrent, torrent_writer: W) -> Self {
+    pub fn new(our_id: InternalPeerId, torrent: V1Torrent, torrent_writer: W) -> Self {
         let torrent_state = TorrentState::new(&torrent.info.pieces);
         Self {
             our_id,
@@ -524,7 +524,7 @@ mod test {
     async fn setup_test() -> (JoinHandle<()>, Sender<Messages>, Receiver<Messages>) {
         let torrent = torrent_fixture(vec![1 as u8, 20]);
         let torrent_writer = MemoryTorrentWriter::new(torrent.clone());
-        let processor = TorrentProcessor::new(vec![1,2,3], torrent.clone(), torrent_writer);
+        let processor = TorrentProcessor::new(Arc::new(vec![1,2,3]), torrent.clone(), torrent_writer);
 
         // channel for new connections
         let (conn_tx, conn_rx) = channel(1);

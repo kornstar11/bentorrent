@@ -1,13 +1,28 @@
-use std::{net::IpAddr, str::FromStr};
+use std::{net::{IpAddr, SocketAddrV4, SocketAddrV6, SocketAddr}, str::FromStr};
 
 use crate::file::{Bencode, Error, map_dict_keys};
 
 #[derive(Debug, Clone)]
 pub struct TrackerPeer {
-    peer_id: Vec<u8>,
-    address: IpAddr,
-    port: u32,
+    pub peer_id: Vec<u8>,
+    pub address: IpAddr,
+    pub port: u16,
 }
+
+impl TrackerPeer {
+    pub fn socket_addr(&self) -> SocketAddr {
+        match self.address {
+            IpAddr::V4(ip) => {
+                SocketAddr::V4(SocketAddrV4::new(ip, self.port))
+            },
+            IpAddr::V6(ip) => {
+                SocketAddr::V6(SocketAddrV6::new(ip, self.port, 0, 0))
+            }
+        }
+    }
+    
+}
+
 impl<'a> TryFrom<Bencode<'a>> for TrackerPeer {
     type Error = Error;
     
@@ -39,10 +54,10 @@ impl<'a> TryFrom<Bencode<'a>> for TrackerPeer {
 }
 #[derive(Debug, Clone)]
 pub struct TrackerResponse {
-    complete: i64,
-    incomplete: i64,
-    interval: i64,
-    peers: Vec<TrackerPeer>
+    pub complete: i64,
+    pub incomplete: i64,
+    pub interval: i64,
+    pub peers: Vec<TrackerPeer>
 }
 
 impl<'a> TryFrom<Bencode<'a>> for TrackerResponse {
