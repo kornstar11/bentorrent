@@ -1,10 +1,10 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut, TryGetError};
 use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, sync::mpsc::{self, Sender}};
 use anyhow::Result;
-use crate::{model::{PeerContext, TrackerResponse, V1Torrent}, peer::{InternalPeerId, error::PeerError, protocol::{Decode, Encode, Handshake, HandshakeDecoder, MessagesDecoder}, state::PeerStartMessage}};
+use crate::{model::{PeerContext, TrackerResponse, V1Torrent}, peer::{InternalPeerId, PIECE_BLOCK_SIZE, error::PeerError, protocol::{Decode, Encode, Handshake, HandshakeDecoder, MessagesDecoder, ProtocolError}, state::PeerStartMessage}};
 
 pub async fn connect_torrent_peers(torrent: V1Torrent, our_id: InternalPeerId, tracker_resp: TrackerResponse, tx: Sender<PeerStartMessage>) -> Result<()> {
     let mut active_conns = FuturesUnordered::new();
@@ -84,7 +84,7 @@ impl <T: Encode, D: Decode<T = T>> Connection<D> {
         Connection {
             stream,
             // Allocate the buffer with 4kb of capacity.
-            buffer: BytesMut::with_capacity(4096),
+            buffer: BytesMut::with_capacity(PIECE_BLOCK_SIZE + 4096),
             decoder: PhantomData
         }
     }
@@ -95,12 +95,27 @@ impl <T: Encode, D: Decode<T = T>> Connection<D> {
 
     pub async fn read_msg(&mut self)-> Result<Option<T>>
     {
+        let mut needs = 0;
         loop {
-            if let Ok(msg) = D::decode(&mut self.buffer) {
-                return Ok(Some(msg));
+            if self.buffer.remaining() >= needs {
+                let mut cloned = self.buffer.clone();
+                match D::decode(&mut cloned) {
+                    Ok(msg) => {
+                        self.buffer = cloned;
+                        return Ok(Some(msg))
+                    },
+                    Err(ProtocolError::TryGetError(TryGetError{requested, available: _})) => {
+                        log::debug!("Not enuff: {}, {}", requested, needs);
+                        needs = requested
+                    },
+                    Err(e) => return Err(e.into()),
+                }
             }
 
-            if 0 == self.stream.read_buf(&mut self.buffer).await? {
+            let read_bytes = self.stream.read_buf(&mut self.buffer).await?;
+            log::debug!("Readbytes={}, remain={}", read_bytes, self.buffer.remaining());
+
+            if 0 == read_bytes {
                 // The remote closed the connection. For this to be
                 // a clean shutdown, there should be no data in the
                 // read buffer. If there is, this means that the

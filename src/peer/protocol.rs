@@ -200,6 +200,13 @@ impl Decode for MessagesDecoder {
             return Ok(Messages::KeepAlive);
         }
 
+        if len > b.remaining() {
+            return Err(ProtocolError::TryGetError(TryGetError{
+                requested: len,
+                available: b.remaining(),
+            }));
+        }
+
         let id = b.try_get_u8()?;
 
         match id {
