@@ -24,6 +24,7 @@ mod util {
 #[derive(Clone, Debug)]
 pub struct V1TorrentInfo {
     pub length: i64,
+    pub piece_length: i64,
     pub pieces: Vec<V1Piece>,
     pub name: String,
     pub info_hash: Vec<u8>,
@@ -49,6 +50,12 @@ impl<'a> TryFrom<Bencode<'a>> for V1TorrentInfo {
                 *len
             } else {
                 return Err(Error::missing("length"));
+            };
+
+            let piece_length = if let Some(Bencode::Int(len)) = conv.get("piece length") {
+                *len
+            } else {
+                return Err(Error::missing("piece length"));
             };
 
             // pieces parsing
@@ -79,6 +86,7 @@ impl<'a> TryFrom<Bencode<'a>> for V1TorrentInfo {
             Ok(V1TorrentInfo {
                 length,
                 pieces,
+                piece_length,
                 name,
                 info_hash,
             })

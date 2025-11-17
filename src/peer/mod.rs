@@ -33,7 +33,7 @@ impl TorrentAllocation {
     fn allocate_torrent(torrent: &V1Torrent) -> Self {
         let total_pieces = torrent.info.pieces.len();
 
-        let max_piece_size = torrent.info.length as usize / total_pieces;
+        let max_piece_size = torrent.info.piece_length as usize;
         let last_piece_size = torrent.info.length as usize - ((total_pieces -1) * max_piece_size);//torrent.info.length as usize % total_pieces;
 
         Self {
@@ -57,7 +57,7 @@ pub fn make_peer_id() -> InternalPeerId {
 pub async fn start_processing(torrent: V1Torrent) -> Result<()> {
     let client = Client::new();
     let our_id = make_peer_id();
-    log::info!("My peerid: {}", hex::encode(our_id.as_ref()));
+    log::info!("Torrent start: our_id={}, torrent_len={}, piece_len={}", hex::encode(our_id.as_ref()), torrent.info.length, torrent.info.piece_length);
 
     let (conn_tx, conn_rx) = tokio::sync::mpsc::channel(1);
 
@@ -70,7 +70,7 @@ pub async fn start_processing(torrent: V1Torrent) -> Result<()> {
 
     let tracker_client = TrackerClient::new(torrent.clone(), client, Arc::clone(&our_id));
     let tracker_response = tracker_client.get_announce().await?;
-    log::info!("Tracker responds:  peers_availiable={}", tracker_response.peers.len());
+    log::info!("Tracker responds: peers_availiable={}", tracker_response.peers.len());
 
     let connections = connect_torrent_peers(torrent, our_id, tracker_response, conn_tx);
 
@@ -96,6 +96,7 @@ mod test {
         V1Torrent {
             info: V1TorrentInfo {
                 length: 10_240_000,
+                piece_length: 40_000,
                 name: "test.txt".to_string(),
                 pieces: vec![
                     V1Piece{hash: vec![11; 20]},

@@ -21,6 +21,23 @@ type PeerToSender = HashMap<InternalPeerId, Sender<Messages>>;
 
 const MAX_OUTSTANDING_REQUESTS: usize = 4;
 
+///
+/// Messages
+
+///
+/// bidirectional channels for a single peers connection
+pub struct PeerStartMessage {
+    pub handshake: Handshake,
+    pub rx: Receiver<Messages>,
+    pub tx: Sender<Messages>,
+}
+
+impl PeerStartMessage {
+    fn into(self) -> (Handshake, Receiver<Messages>, Sender<Messages>) {
+        (self.handshake, self.rx, self.tx)
+    }
+}
+
 #[derive(Default, Debug)]
 struct PeerPieceMap {
     pieces_to_peers: HashMap<u32, HashSet<InternalPeerId>>,
@@ -232,23 +249,6 @@ impl TorrentState {
     }
 }
 
-///
-/// Messages
-
-///
-/// bidirectional channels for a single peers connection
-pub struct PeerStartMessage {
-    pub handshake: Handshake,
-    pub rx: Receiver<Messages>,
-    pub tx: Sender<Messages>,
-}
-
-impl PeerStartMessage {
-    fn into(self) -> (Handshake, Receiver<Messages>, Sender<Messages>) {
-        (self.handshake, self.rx, self.tx)
-    }
-}
-
 pub struct TorrentProcessor<W> {
     our_id: InternalPeerId,
     torrent: V1Torrent,
@@ -337,9 +337,8 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                 if let Some(tx) = peer_to_tx.get(&req.peer_id) {
                     let req_msg = Messages::Request { index: req.index, begin: req.begin, length: req.length };
                     if let Err(_) = tx.send(req_msg).await {
-                        let _ = peers_closed.insert(Arc::clone(&req.peer_id));
+                        let _ = peers_closed.insert(req.peer_id);
                     }
-                    log::debug!("Sent request {:?}", req);
                 }
             }
         }
@@ -416,6 +415,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                         .add_pieces_for_peer(peer_id, vec![piece_index]);
                     if let Some(interest) = interest_change {
                         let msg = FlagMessages::interest_msg(interest);
+                        log::debug!("Signal interest..");
                         if let Err(_) = tx.send(msg).await {
                             break;
                         }
@@ -496,6 +496,8 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                 }
             }
         }
+
+        log::info!("Peer state processing stopped. peer_id={}", hex::encode(peer_id.as_ref()));
 
         Ok(())
     }
