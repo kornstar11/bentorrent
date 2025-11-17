@@ -34,7 +34,7 @@ impl TorrentWriter for MemoryTorrentWriter {
         if let Some(piece) = self.memory.get_mut(index as usize) {
             log::debug!("Writing {}", piece.len());
             let end_pos = begin as usize + block.len();
-            if end_pos >= piece.len() {
+            if end_pos > piece.len() {
                 return Err(PeerError::BadBounds(index as _, end_pos).into());
             }
             for (idx, ele) in block.into_iter().enumerate() {
