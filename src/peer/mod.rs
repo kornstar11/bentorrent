@@ -13,7 +13,7 @@ use sha1::Digest;
 use reqwest::Client;
 pub use tracker::TrackerClient;
 
-use crate::{model::V1Torrent, peer::{state::TorrentProcessor, writer::MemoryTorrentWriter}};
+use crate::{model::V1Torrent, peer::{net::connect_torrent_peers, state::TorrentProcessor, writer::MemoryTorrentWriter}};
 
 pub type PeerId = Vec<u8>;
 pub type InternalPeerId = Arc<PeerId>;
@@ -26,8 +26,6 @@ pub struct TorrentAllocation {
     total_pieces: usize,
     max_piece_size: usize,
     last_piece_size: usize,
-    max_blocks_per_piece: usize,
-    blocks_in_last_piece: usize,
 
 }
 
@@ -38,15 +36,10 @@ impl TorrentAllocation {
         let max_piece_size = torrent.info.length as usize / total_pieces;
         let last_piece_size = torrent.info.length as usize - ((total_pieces -1) * max_piece_size);//torrent.info.length as usize % total_pieces;
 
-        let max_blocks_per_piece = max_piece_size.div_ceil(PIECE_BLOCK_SIZE);
-        let blocks_in_last_piece = last_piece_size.div_ceil(PIECE_BLOCK_SIZE);
-
         Self {
             total_pieces,
             max_piece_size,
             last_piece_size,
-            max_blocks_per_piece,
-            blocks_in_last_piece,
         }
     }
 }
@@ -79,11 +72,15 @@ pub async fn start_processing(torrent: V1Torrent) -> Result<()> {
     let tracker_response = tracker_client.get_announce().await?;
     log::info!("Tracker responds:  peers_availiable={}", tracker_response.peers.len());
 
+    let connections = connect_torrent_peers(tracker_response, conn_tx);
+
     tokio::select! {
         _ = torrent_processor_task => {
             log::info!("Torrent processor done...");
         }
-
+        _ = connections => {
+            log::info!("Connection processor done...");
+        }
     }
 
     Ok(())

@@ -1,6 +1,7 @@
 use std::fs::read;
 
-use bentorrent::{model::V1Torrent, peer::TrackerClient};
+use bentorrent::{model::V1Torrent, peer::start_processing};
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     env_logger::init();
@@ -8,9 +9,10 @@ async fn main() {
     match bentorrent::file::parse_bencode(&torrent) {
         Ok(parsed) => {
             let torrent = V1Torrent::try_from(parsed).unwrap();
-            let client = reqwest::Client::new();
-            //let tracker_client = TrackerClient::new(torrent, client);
-            //tracker_client.get_announce().await;
+            if let Err(e) = start_processing(torrent).await {
+                log::error!("Processor error: {:?}", e);
+            }
+            log::info!("Done!");
         }
         Err(e) => {
             eprintln!("Missing: {:?}", e);

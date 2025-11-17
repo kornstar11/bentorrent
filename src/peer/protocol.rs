@@ -1,8 +1,7 @@
 //https://wiki.theory.org/BitTorrentSpecification#Tracker_HTTP.2FHTTPS_Protocol
 
 use crate::model::PeerContext;
-use bytes::{Buf, BufMut, BytesMut, TryGetError};
-use nom::AsBytes;
+use bytes::{Buf, BufMut, TryGetError};
 use thiserror::Error;
 
 const HANDSHAKE_PROTOCOL_ID: &[u8] = "BitTorrent protocol".as_bytes();
@@ -15,8 +14,6 @@ pub enum ProtocolError {
     TryGetError(#[from] TryGetError),
     #[error("Bad id")]
     BadId,
-    #[error("OtherMessage")]
-    OtherMessage,
 }
 
 ///
@@ -255,7 +252,7 @@ impl Decode for MessagesDecoder {
 mod test {
     use std::time::SystemTime;
 
-    use bytes::{Buf, Bytes};
+    use bytes::{Buf, BytesMut};
     use sha1::{Digest, Sha1};
 
     use super::*;

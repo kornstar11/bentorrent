@@ -1,11 +1,9 @@
 use std::marker::PhantomData;
 
-use bytes::{BufMut, BytesMut, TryGetError};
-use futures::stream;
+use bytes::BytesMut;
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, sync::mpsc::{self, Sender}};
-use tokio::io::BufWriter;
 use anyhow::Result;
-use crate::{model::{TrackerResponse, V1Torrent}, peer::{error::PeerError, protocol::{Decode, Encode, Handshake, HandshakeDecoder, Messages, MessagesDecoder}, state::PeerStartMessage}};
+use crate::{model::TrackerResponse, peer::{error::PeerError, protocol::{Decode, Encode, HandshakeDecoder, MessagesDecoder}, state::PeerStartMessage}};
 
 pub async fn connect_torrent_peers(tracker_resp: TrackerResponse, tx: Sender<PeerStartMessage>) -> Result<()> {
 
@@ -23,7 +21,7 @@ pub async fn connect_torrent_peers(tracker_resp: TrackerResponse, tx: Sender<Pee
     Ok(())
 }
 
-async fn run_connection(mut stream: TcpStream, tx: Sender<PeerStartMessage>) -> Result<()> {
+async fn run_connection(stream: TcpStream, tx: Sender<PeerStartMessage>) -> Result<()> {
     let (send_to_processor, send_to_processor_rx) = mpsc::channel(1);
     let (recv_from_processor_tx, mut recv_from_processor) = mpsc::channel(1);
     let mut conn: Connection<HandshakeDecoder> = Connection::new(stream);
@@ -101,7 +99,7 @@ impl <T: Encode, D: Decode<T = T>> Connection<D> {
     pub async fn write_msg(&mut self, msg: T) -> Result<()> {
         let mut b = BytesMut::new();
         msg.encode(&mut b);
-        self.stream.write_buf(&mut b);
+        self.stream.write_buf(&mut b).await?;
         Ok(())
     }
 }
