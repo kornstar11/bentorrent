@@ -34,7 +34,7 @@ impl TorrentAllocation {
         let total_pieces = torrent.info.pieces.len();
 
         let max_piece_size = torrent.info.piece_length as usize;
-        let last_piece_size = torrent.info.length as usize - ((total_pieces -1) * max_piece_size);//torrent.info.length as usize % total_pieces;
+        let last_piece_size = torrent.info.length as usize - ((total_pieces - 1) * max_piece_size);//torrent.info.length as usize % total_pieces;
 
         Self {
             total_pieces,
@@ -96,7 +96,7 @@ mod test {
         V1Torrent {
             info: V1TorrentInfo {
                 length: 10_240_000,
-                piece_length: 40_000,
+                piece_length: 5120000,
                 name: "test.txt".to_string(),
                 pieces: vec![
                     V1Piece{hash: vec![11; 20]},

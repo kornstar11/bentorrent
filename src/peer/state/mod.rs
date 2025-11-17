@@ -287,8 +287,11 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                     }
                 }
                 Some((peer_id, res)) = handle_peer_requests_fq.next() => {
+                    let state = Arc::clone(&state);
+                    let mut  state = state.lock().await;
                     let _ = peer_to_tx.remove(&peer_id);
-                    log::info!("Peer: {} closed {:?}", hex::encode(peer_id), res);
+                    let _ = state.torrent_state.remove_peer(Arc::clone(&peer_id));
+                    log::info!("Peer: {} closed {:?}", hex::encode(peer_id.as_ref()), res);
                     ()
                 }
                 _ = tokio::time::sleep(Duration::from_secs(1)) => {
@@ -306,10 +309,10 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
     ///
     /// Compute peers with pieces we want, and that are willing to share. Then begin to dispatch requests to them
     async fn compute_requests(state: Arc<Mutex<Self>>, peer_to_tx: &mut PeerToSender) {
-        let mut state = state.lock().await;
-        log::trace!("Computing peer requests {:?}", state.torrent_state);
-        let torrent = state.torrent.clone();
-        let block_to_request_tracker = state
+        let mut locked_state = state.lock().await;
+        log::trace!("Computing peer requests {:?}", locked_state.torrent_state);
+        let torrent = locked_state.torrent.clone();
+        let block_to_request_tracker = locked_state
             .torrent_state
             .peer_willing_to_upload_pieces()
             .into_iter()
@@ -321,15 +324,13 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
             .collect::<HashMap<_, _>>();
 
         log::debug!("Computed requests to peer: pieces_not_started={} requests_made={}", 
-            state.torrent_state.pieces_not_started.len(),
+            locked_state.torrent_state.pieces_not_started.len(),
             block_to_request_tracker.len()
         );
 
-        let mut peers_closed = HashSet::new();
-
         for (piece_id, tracker) in block_to_request_tracker.into_iter() {
             log::debug!("Dispatch request for piece_id {}", piece_id);
-            state
+            locked_state
                 .torrent_state
                 .set_piece_started(piece_id);
             for req in tracker.requests_to_make {
@@ -337,17 +338,10 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                 if let Some(tx) = peer_to_tx.get(&req.peer_id) {
                     let req_msg = Messages::Request { index: req.index, begin: req.begin, length: req.length };
                     if let Err(_) = tx.send(req_msg).await {
-                        let _ = peers_closed.insert(req.peer_id);
+                        log::debug!("Got closed tx: {}", hex::encode(req.peer_id.as_ref()));
                     }
                 }
             }
-        }
-
-        log::debug!("Peers with closed channels: {:?}", peers_closed);
-
-        for peer_closed in peers_closed.into_iter() {
-            let _ = peer_to_tx.remove(&peer_closed);
-            let _ = state.torrent_state.remove_peer(Arc::clone(&peer_closed));
         }
     }
 
@@ -372,22 +366,21 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         tx: Sender<Messages>,
         rx: Receiver<Messages>,
         handshake: Handshake,
-    ) -> (PeerId, Result<()>) {
-        let peer_id = handshake.peer_ctx.peer_id.clone();
-        let res = Self::inner_handle_peer_msgs(state, tx, rx, handshake).await;
+    ) -> (InternalPeerId, Result<()>) {
+        let peer_id = Arc::new(handshake.peer_ctx.peer_id.clone());
+        let res = Self::inner_handle_peer_msgs(Arc::clone(&peer_id), state, tx, rx).await;
         (peer_id, res)
     }
 
     ///
     /// Handle all incoming state updates from a single peer, and requests
     async fn inner_handle_peer_msgs(
+        peer_id: InternalPeerId,
         state: Arc<Mutex<Self>>,
         tx: Sender<Messages>,
         mut rx: Receiver<Messages>,
-        handshake: Handshake,
     ) -> Result<()> {
         log::info!("Starting torrent processing...");
-        let peer_id = Arc::new(handshake.peer_ctx.peer_id);
         let mut outstanding_requests = vec![];
 
         while let Some(msg) = rx.recv().await {
