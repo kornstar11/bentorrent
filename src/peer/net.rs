@@ -105,7 +105,6 @@ impl <T: Encode, D: Decode<T = T>> Connection<D> {
                         return Ok(Some(msg))
                     },
                     Err(ProtocolError::TryGetError(TryGetError{requested, available: _})) => {
-                        log::debug!("Not enuff: {}, {}", requested, needs);
                         needs = requested
                     },
                     Err(e) => return Err(e.into()),
@@ -113,7 +112,6 @@ impl <T: Encode, D: Decode<T = T>> Connection<D> {
             }
 
             let read_bytes = self.stream.read_buf(&mut self.buffer).await?;
-            log::debug!("Readbytes={}, remain={}", read_bytes, self.buffer.remaining());
 
             if 0 == read_bytes {
                 // The remote closed the connection. For this to be
