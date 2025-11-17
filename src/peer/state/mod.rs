@@ -307,7 +307,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
     /// Compute peers with pieces we want, and that are willing to share. Then begin to dispatch requests to them
     async fn compute_requests(state: Arc<Mutex<Self>>, peer_to_tx: &mut PeerToSender) {
         let mut state = state.lock().await;
-        log::debug!("Computing peer requests {:?}", state.torrent_state);
+        log::trace!("Computing peer requests {:?}", state.torrent_state);
         let torrent = state.torrent.clone();
         let block_to_request_tracker = state
             .torrent_state
@@ -320,6 +320,11 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
             }).take(MAX_OUTSTANDING_REQUESTS)
             .collect::<HashMap<_, _>>();
 
+        log::debug!("Computed requests to peer: pieces_not_started={} requests_made={}", 
+            state.torrent_state.pieces_not_started.len(),
+            block_to_request_tracker.len()
+        );
+
         let mut peers_closed = HashSet::new();
 
         for (piece_id, tracker) in block_to_request_tracker.into_iter() {
@@ -328,12 +333,13 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                 .torrent_state
                 .set_piece_started(piece_id);
             for req in tracker.requests_to_make {
-                log::trace!("Attempting to send request {:?}", req);
+                log::debug!("Attempting to send request {:?}", req);
                 if let Some(tx) = peer_to_tx.get(&req.peer_id) {
                     let req_msg = Messages::Request { index: req.index, begin: req.begin, length: req.length };
                     if let Err(_) = tx.send(req_msg).await {
-                        let _ = peers_closed.insert(req.peer_id);
+                        let _ = peers_closed.insert(Arc::clone(&req.peer_id));
                     }
+                    log::debug!("Sent request {:?}", req);
                 }
             }
         }
@@ -388,6 +394,8 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         while let Some(msg) = rx.recv().await {
             let peer_id = Arc::clone(&peer_id);
             let mut state = state.lock().await;
+
+            log::debug!("Message: peer_id={}, msg={:?}", hex::encode(peer_id.as_ref()), msg);
             match msg {
                 Messages::KeepAlive => {
                     // TODO reset timer or something, and expire after xx time
@@ -421,7 +429,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                         .filter(|(_, was_set)| *was_set)
                         .map(|(block, _)| block as u32)
                         .collect::<Vec<_>>();
-                    log::info!("peer_id={}, has={:?}", hex::encode(peer_id.as_ref()), pieces_present);
+                    log::info!("Bitfield: peer_id={}, has={:?}", hex::encode(peer_id.as_ref()), pieces_present);
                     let interest_change = state
                         .torrent_state
                         .add_pieces_for_peer(peer_id, pieces_present);

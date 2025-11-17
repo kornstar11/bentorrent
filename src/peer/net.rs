@@ -1,28 +1,29 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, sync::Arc};
 
 use bytes::BytesMut;
 use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, sync::mpsc::{self, Sender}};
 use anyhow::Result;
-use crate::{model::TrackerResponse, peer::{error::PeerError, protocol::{Decode, Encode, HandshakeDecoder, MessagesDecoder}, state::PeerStartMessage}};
+use crate::{model::{PeerContext, TrackerResponse, V1Torrent}, peer::{InternalPeerId, error::PeerError, protocol::{Decode, Encode, Handshake, HandshakeDecoder, MessagesDecoder}, state::PeerStartMessage}};
 
-pub async fn connect_torrent_peers(tracker_resp: TrackerResponse, tx: Sender<PeerStartMessage>) -> Result<()> {
-
+pub async fn connect_torrent_peers(torrent: V1Torrent, our_id: InternalPeerId, tracker_resp: TrackerResponse, tx: Sender<PeerStartMessage>) -> Result<()> {
     let mut active_conns = FuturesUnordered::new();
     log::debug!("Begin initial connection to peers: {:?}", tracker_resp.peers);
+
     for peer in tracker_resp.peers.into_iter() {
         log::info!("Attempting to connect to {:?}", peer.socket_addr());
         let stream = TcpStream::connect(peer.socket_addr()).await;
         match stream {
             Ok(stream) => {
                 log::info!("Connected to {:?}", peer.address);
-                active_conns.push(run_connection(stream, tx.clone()));
+                active_conns.push(run_connection(torrent.clone(), Arc::clone(&our_id), stream, tx.clone()));
             },
             Err(e) => {
                 log::warn!("Unable to connect to peer: ip={:?}, err={:?}", peer.socket_addr(), e);
             }
         }
     }
+    log::info!("Peer connections spawned: {}", active_conns.len());
     while let Some(r) = active_conns.next().await {
         log::info!("Connection finished: {:?}", r);
     }
@@ -30,10 +31,19 @@ pub async fn connect_torrent_peers(tracker_resp: TrackerResponse, tx: Sender<Pee
     Ok(())
 }
 
-async fn run_connection(stream: TcpStream, tx: Sender<PeerStartMessage>) -> Result<()> {
+async fn run_connection(torrent: V1Torrent, our_id: InternalPeerId, stream: TcpStream, tx: Sender<PeerStartMessage>) -> Result<()> {
     let (send_to_processor, send_to_processor_rx) = mpsc::channel(1);
     let (recv_from_processor_tx, mut recv_from_processor) = mpsc::channel(1);
     let mut conn: Connection<HandshakeDecoder> = Connection::new(stream);
+
+    let our_handshake = Handshake {
+        peer_ctx: PeerContext {
+            info_hash: torrent.info.info_hash,
+            peer_id: Vec::clone(&our_id)
+        }
+    };
+    conn.write_msg(our_handshake).await?;
+    log::debug!("Sent handshake...");
     if let Some(handshake) = conn.read_msg().await? {
         let peer_msg = PeerStartMessage {
             handshake,
@@ -96,7 +106,7 @@ impl <T: Encode, D: Decode<T = T>> Connection<D> {
                 // read buffer. If there is, this means that the
                 // peer closed the socket while sending a frame.
                 if self.buffer.is_empty() {
-                    log::info!("Connection closed...");
+                    log::info!("Connection closed... ");
                     return Ok(None);
                 } else {
                     return Err(PeerError::Other("connection reset by peer".into()).into());

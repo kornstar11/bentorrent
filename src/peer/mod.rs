@@ -65,14 +65,14 @@ pub async fn start_processing(torrent: V1Torrent) -> Result<()> {
     let torrent_processor = TorrentProcessor::new(Arc::clone(&our_id), torrent.clone(), torrent_writer);
 
     let torrent_processor_task = tokio::spawn(async move {
-        torrent_processor.start(conn_rx)
+        torrent_processor.start(conn_rx).await
     });
 
-    let tracker_client = TrackerClient::new(torrent, client, our_id);
+    let tracker_client = TrackerClient::new(torrent.clone(), client, Arc::clone(&our_id));
     let tracker_response = tracker_client.get_announce().await?;
     log::info!("Tracker responds:  peers_availiable={}", tracker_response.peers.len());
 
-    let connections = connect_torrent_peers(tracker_response, conn_tx);
+    let connections = connect_torrent_peers(torrent, our_id, tracker_response, conn_tx);
 
     tokio::select! {
         _ = torrent_processor_task => {
