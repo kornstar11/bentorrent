@@ -25,57 +25,58 @@ pub async fn connect_torrent_peers(tracker_resp: TrackerResponse, tx: Sender<Pee
 
 async fn run_connection(mut stream: TcpStream, tx: Sender<PeerStartMessage>) -> Result<()> {
     let (send_to_processor, send_to_processor_rx) = mpsc::channel(1);
-    let (recv_from_processor_tx, recv_from_processor) = mpsc::channel(1);
-    let mut begin: Connection<HandshakeDecoder> = Connection::new(stream)
-    if let Some(handshake) = begin.read_msg().await? {
+    let (recv_from_processor_tx, mut recv_from_processor) = mpsc::channel(1);
+    let mut conn: Connection<HandshakeDecoder> = Connection::new(stream);
+    if let Some(handshake) = conn.read_msg().await? {
         let peer_msg = PeerStartMessage {
             handshake,
             rx: send_to_processor_rx,
             tx: recv_from_processor_tx,
         };
         tx.send(peer_msg).await?;
-
-    }
-    Ok(())
-    // let mut connection_stage = ConnectionStage::begin(stream);
-
-    // loop {
-    //     match connection_stage{
-    //         ConnectionStage::Begin(mut begin) => {
-    //             if let Ok(Some(handshake)) = begin.read_msg().await {
-    //                 
-    //             } else {
-    //                 return Ok(())
-    //             }
-    //         },
-    //         ConnectionStage::Running(running) => {
-
-    //         }
-    //     }
-    // }
-}
-
-enum ConnectionStage {
-    Begin(Connection<HandshakeDecoder>),
-    Running(Connection<MessagesDecoder>)
-} 
-
-impl ConnectionStage {
-    fn begin(stream: TcpStream) -> Self {
-        Self::Begin(Connection::new(stream))
+    } else {
+        return Ok(());
     }
 
-    fn translate(stage: Self) -> Self {
-        match stage {
-            ConnectionStage::Begin(begin) => {
-                ConnectionStage::Running(begin.translate())
+    let mut conn: Connection<MessagesDecoder> = conn.translate();
+
+    loop {
+        tokio::select! {
+            Some(msg) = recv_from_processor.recv() => {
+                conn.write_msg(msg).await?;
             },
-            ConnectionStage::Running(running) => {
-                ConnectionStage::Running(running)
+            Ok(Some(msg)) = conn.read_msg() => {
+                send_to_processor.send(msg).await?
+            },
+            else => {
+                break;
             }
         }
     }
+    Ok(())
 }
+
+// enum ConnectionStage {
+//     Begin(Connection<HandshakeDecoder>),
+//     Running(Connection<MessagesDecoder>)
+// } 
+
+// impl ConnectionStage {
+//     fn begin(stream: TcpStream) -> Self {
+//         Self::Begin(Connection::new(stream))
+//     }
+
+//     fn translate(stage: Self) -> Self {
+//         match stage {
+//             ConnectionStage::Begin(begin) => {
+//                 ConnectionStage::Running(begin.translate())
+//             },
+//             ConnectionStage::Running(running) => {
+//                 ConnectionStage::Running(running)
+//             }
+//         }
+//     }
+// }
 pub struct Connection<D> {
     stream: TcpStream,
     buffer: BytesMut,
@@ -119,9 +120,9 @@ impl <T: Encode, D: Decode<T = T>> Connection<D> {
     }
 
     pub async fn write_msg(&mut self, msg: T) -> Result<()> {
-        let b = BytesMut::new();
-        msg.encode(b);
-        self.stream.write_buf(b[0..b.len()]);
+        let mut b = BytesMut::new();
+        msg.encode(&mut b);
+        self.stream.write_buf(&mut b);
         Ok(())
     }
 }
