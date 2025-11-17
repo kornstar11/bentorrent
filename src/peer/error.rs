@@ -1,3 +1,5 @@
+use std::error;
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -8,6 +10,8 @@ pub enum PeerError {
     BadBounds(usize, usize),
     #[error("Bad Piece Index: {0}")]
     BadPieceIdx(usize),
+    #[error("Error: {0}")]
+    Other(String)
 }
 
 impl PeerError {

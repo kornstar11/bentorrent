@@ -21,11 +21,11 @@ pub enum ProtocolError {
 
 ///
 /// Simple traits for encode/decode
-trait Encode {
+pub trait Encode {
     fn encode<B: BufMut>(&self, i: &mut B);
 }
 
-trait Decode {
+pub trait Decode: Send {
     type T;
     fn decode<B: Buf>(b: &mut B) -> Result<Self::T>;
 }
@@ -51,9 +51,10 @@ impl Encode for Handshake {
         i.put(self.peer_ctx.peer_id.as_slice())
     }
 }
+pub struct HandshakeDecoder;
 
-impl Decode for Handshake {
-    type T = Self;
+impl Decode for HandshakeDecoder {
+    type T = Handshake;
 
     fn decode<B: Buf>(b: &mut B) -> Result<Self::T> {
         let p_str_len = b.try_get_u8()?;
@@ -191,32 +192,33 @@ impl Encode for Messages {
         }
     }
 }
+pub struct MessagesDecoder;
 
-impl Decode for Messages {
-    type T = Self;
+impl Decode for MessagesDecoder {
+    type T = Messages;
 
     fn decode<B: Buf>(b: &mut B) -> Result<Self::T> {
         let len = b.try_get_u32()? as usize;
         if len == 0 {
-            return Ok(Self::KeepAlive);
+            return Ok(Messages::KeepAlive);
         }
 
         let id = b.try_get_u8()?;
 
         match id {
-            4 => Ok(Self::Have {
+            4 => Ok(Messages::Have {
                 piece_index: b.try_get_u32()?,
             }),
             5 => {
                 let mut bitfield = vec![0 as u8; len - 1];
                 b.try_copy_to_slice(&mut bitfield)?;
-                Ok(Self::BitField { bitfield: bitfield })
+                Ok(Messages::BitField { bitfield: bitfield })
             }
             6 => {
                 let index = b.try_get_u32()?;
                 let begin = b.try_get_u32()?;
                 let length = b.try_get_u32()?;
-                Ok(Self::Request {
+                Ok(Messages::Request {
                     index,
                     begin,
                     length,
@@ -227,7 +229,7 @@ impl Decode for Messages {
                 let begin = b.try_get_u32()?;
                 let mut block = vec![0 as u8; len - 9];
                 b.try_copy_to_slice(&mut block)?;
-                Ok(Self::Piece {
+                Ok(Messages::Piece {
                     index,
                     begin,
                     block,
@@ -237,13 +239,13 @@ impl Decode for Messages {
                 let index = b.try_get_u32()?;
                 let begin = b.try_get_u32()?;
                 let length = b.try_get_u32()?;
-                Ok(Self::Cancel {
+                Ok(Messages::Cancel {
                     index,
                     begin,
                     length,
                 })
             }
-            i if len == 1 => Ok(Self::Flag(FlagMessages::try_from(i)?)),
+            i if len == 1 => Ok(Messages::Flag(FlagMessages::try_from(i)?)),
             _ => Err(ProtocolError::BadId),
         }
     }
@@ -284,7 +286,7 @@ mod test {
         let p_str = buf_clone.copy_to_bytes(19);
         assert_eq!(p_str, HANDSHAKE_PROTOCOL_ID);
 
-        let handshake = Handshake::decode(&mut buf).unwrap();
+        let handshake = HandshakeDecoder::decode(&mut buf).unwrap();
         assert_eq!(handshake.peer_ctx.info_hash, info_hash)
     }
 
@@ -293,7 +295,7 @@ mod test {
         let hs_b_orig = hex::decode("13426974546f7272656e742070726f746f636f6c00000000000000000164fe7ef1105c57764170edf603c439d64214f1b86a737fe80caf680259963724652756ee4d165b")
             .unwrap();
         let mut bytes = BytesMut::from(hs_b_orig.as_slice());
-        let hs = Handshake::decode(&mut bytes).unwrap();
+        let hs = HandshakeDecoder::decode(&mut bytes).unwrap();
         let mut hs_b = BytesMut::new();
         hs.encode(&mut hs_b);
         let hs_b = hs_b.to_vec();
@@ -304,7 +306,7 @@ mod test {
         let bf_b_orig =
             hex::decode("0000001905fffffffffffffffffffffffffffffffffffffffffffffffe").unwrap();
         let mut bytes = BytesMut::from(bf_b_orig.as_slice());
-        let msg = Messages::decode(&mut bytes).unwrap();
+        let msg = MessagesDecoder::decode(&mut bytes).unwrap();
         let mut hs_b = BytesMut::new();
         msg.encode(&mut hs_b);
         let hs_b = hs_b.to_vec();

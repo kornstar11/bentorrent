@@ -241,9 +241,9 @@ pub struct ProtocolMessage {
 ///
 /// bidirectional channels for a single peers connection
 pub struct PeerStartMessage {
-    handshake: Handshake,
-    rx: Receiver<Messages>,
-    tx: Sender<Messages>,
+    pub handshake: Handshake,
+    pub rx: Receiver<Messages>,
+    pub tx: Sender<Messages>,
 }
 
 impl PeerStartMessage {
