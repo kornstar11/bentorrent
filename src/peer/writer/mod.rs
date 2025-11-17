@@ -11,8 +11,6 @@ pub trait TorrentWriter: Send + Sync {
 
 #[derive(Debug)]
 pub struct MemoryTorrentWriter {
-    torrent: V1Torrent,
-    allocation: TorrentAllocation,
     memory: Vec<Vec<u8>>,
 }
 
@@ -26,14 +24,8 @@ impl MemoryTorrentWriter {
         memory.push(vec![0; allocation.last_piece_size]);
 
         Self {
-            torrent,
-            allocation,
             memory,
         }
-    }
-
-    pub fn into(self) -> Vec<u8> {
-        self.memory.into_iter().flatten().collect()
     }
 }
 

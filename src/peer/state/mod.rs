@@ -1,7 +1,7 @@
 mod request;
 use crate::model::{V1Piece, V1Torrent};
 use crate::peer::state::request::{PeerRequestedPiece, PieceBlockTracking};
-use crate::peer::{InternalPeerId, PeerId, PIECE_BLOCK_SIZE, TorrentAllocation};
+use crate::peer::{InternalPeerId, PeerId};
 use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter, BitFieldWriter};
 use crate::peer::writer::TorrentWriter;
 use crate::peer::protocol::{FlagMessages, Handshake};
@@ -12,7 +12,7 @@ use futures::stream::FuturesUnordered;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex};
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use super::protocol::Messages;
@@ -40,13 +40,13 @@ impl PeerPieceMap {
             .peers_to_pieces
             .entry(Arc::clone(&peer_id))
             .or_insert_with(|| HashSet::new());
-        ptb.insert(piece);
+        let _ = ptb.insert(piece);
 
         let btp = self
             .pieces_to_peers
             .entry(piece)
             .or_insert_with(|| HashSet::new());
-        btp.insert(peer_id);
+        let _ = btp.insert(peer_id);
     }
 
     pub fn get_peers_with_piece(&self, piece: u32) -> HashSet<InternalPeerId> {
@@ -60,25 +60,25 @@ impl PeerPieceMap {
         }
     }
 
-    pub fn remove_piece(&mut self, peer_id: InternalPeerId, piece: u32) {
-        let ptb = self
-            .peers_to_pieces
-            .entry(Arc::clone(&peer_id))
-            .or_insert_with(|| HashSet::new());
-        ptb.remove(&piece);
+    // pub fn remove_piece(&mut self, peer_id: InternalPeerId, piece: u32) {
+    //     let ptb = self
+    //         .peers_to_pieces
+    //         .entry(Arc::clone(&peer_id))
+    //         .or_insert_with(|| HashSet::new());
+    //     let _ = ptb.remove(&piece);
 
-        let btp = self
-            .pieces_to_peers
-            .entry(piece)
-            .or_insert_with(|| HashSet::new());
-        btp.remove(&peer_id);
-    }
+    //     let btp = self
+    //         .pieces_to_peers
+    //         .entry(piece)
+    //         .or_insert_with(|| HashSet::new());
+    //     let _ = btp.remove(&peer_id);
+    // }
 
     pub fn remove_peer(&mut self, peer_id: &InternalPeerId) {
         if let Some(blocks) = self.peers_to_pieces.remove(peer_id) {
             for block in blocks.into_iter() {
                 if let Some(peers) = self.pieces_to_peers.get_mut(&block) {
-                    peers.remove(peer_id);
+                    let _ = peers.remove(peer_id);
                 }
             }
         }
@@ -119,25 +119,25 @@ impl TorrentState {
     }
     fn add_peer_id(&mut self, peer_id: InternalPeerId) {
         if !self.peers.contains(&peer_id) {
-            self.peers.insert(peer_id);
+            let _ = self.peers.insert(peer_id);
         }
     }
 
     pub fn set_peer_choked_us(&mut self, peer_id: InternalPeerId, choked: bool) {
         self.add_peer_id(Arc::clone(&peer_id));
         if !choked {
-            self.peers_not_choking.insert(peer_id);
+            let _ = self.peers_not_choking.insert(peer_id);
         } else {
-            self.peers_not_choking.remove(&peer_id);
+            let _ = self.peers_not_choking.remove(&peer_id);
         }
     }
 
     pub fn set_peers_interested_in_us(&mut self, peer_id: InternalPeerId, interested: bool) {
         self.add_peer_id(Arc::clone(&peer_id));
         if interested {
-            self.peers_interested.insert(peer_id);
+            let _ = self.peers_interested.insert(peer_id);
         } else {
-            self.peers_interested.remove(&peer_id);
+            let _ = self.peers_interested.remove(&peer_id);
         }
     }
 
@@ -157,21 +157,21 @@ impl TorrentState {
         }
     }
 
-    pub fn peers_that_are_interested(&self, interested: bool) -> HashSet<InternalPeerId> {
-        if !interested {
-            return self
-                .peers
-                .difference(&self.peers_interested)
-                .map(|a| Arc::clone(a))
-                .collect();
-        } else {
-            return self
-                .peers
-                .intersection(&self.peers_interested)
-                .map(|a| Arc::clone(a))
-                .collect();
-        }
-    }
+    // pub fn peers_that_are_interested(&self, interested: bool) -> HashSet<InternalPeerId> {
+    //     if !interested {
+    //         return self
+    //             .peers
+    //             .difference(&self.peers_interested)
+    //             .map(|a| Arc::clone(a))
+    //             .collect();
+    //     } else {
+    //         return self
+    //             .peers
+    //             .intersection(&self.peers_interested)
+    //             .map(|a| Arc::clone(a))
+    //             .collect();
+    //     }
+    // }
 
     ///
     /// If peer send bitfield or has message then call this, returns "our interest".
@@ -202,8 +202,8 @@ impl TorrentState {
     }
 
     pub fn set_piece_started(&mut self, piece_id: u32) {
-            self.pieces_not_started.remove(&piece_id);
-            self.pieces_started.insert(piece_id);
+            let _ = self.pieces_not_started.remove(&piece_id);
+            let _ = self.pieces_started.insert(piece_id);
     }
 
     pub fn peer_willing_to_upload_pieces(&mut self) -> HashMap<u32, HashSet<InternalPeerId>> {
@@ -222,11 +222,11 @@ impl TorrentState {
 
     pub fn remove_peer(&mut self, peer_id: InternalPeerId) -> Option<PeerId> {
         self.add_peer_id(Arc::clone(&peer_id));
-        self.peers.remove(&peer_id);
-        self.peers_interested.remove(&peer_id);
-        self.peers_not_choking.remove(&peer_id);
-        self.block_peer_map.remove_peer(&peer_id);
-        self.internal_peer_state.remove(&peer_id);
+        let _ = self.peers.remove(&peer_id);
+        let _ = self.peers_interested.remove(&peer_id);
+        let _ = self.peers_not_choking.remove(&peer_id);
+        let _ = self.block_peer_map.remove_peer(&peer_id);
+        let _ = self.internal_peer_state.remove(&peer_id);
 
         return Arc::into_inner(peer_id);
     }
@@ -234,9 +234,6 @@ impl TorrentState {
 
 ///
 /// Messages
-pub struct ProtocolMessage {
-    msg: Messages,
-}
 
 ///
 /// bidirectional channels for a single peers connection
@@ -270,7 +267,8 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         }
         
     }
-    pub async fn start(mut self, mut rx: Receiver<PeerStartMessage>) {
+    pub async fn start(self, mut rx: Receiver<PeerStartMessage>) {
+        log::info!("torrent state processor starting... {}", hex::encode(self.our_id.as_ref()));
         let state = Arc::new(Mutex::new(self));
         let mut peer_to_tx: PeerToSender = HashMap::new();
         let mut handle_peer_requests_fq = FuturesUnordered::new();
@@ -282,14 +280,14 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                     log::info!("Accepting peer {}", hex::encode(&handshake.peer_ctx.peer_id));
                     // send peer back state needed, pieces we have and the choke, interested
                     if let Ok(_) = Self::init_connection(Arc::clone(&state), &mut tx).await {
-                        peer_to_tx.insert(Arc::new(handshake.peer_ctx.peer_id.clone()), tx.clone());
+                        let _ = peer_to_tx.insert(Arc::new(handshake.peer_ctx.peer_id.clone()), tx.clone());
                         handle_peer_requests_fq.push(Self::handle_peer_msgs(Arc::clone(&state), tx, rx, handshake));
                     } else {
                         log::warn!("Unable to initialize connection {:?}", handshake);
                     }
                 }
                 Some((peer_id, res)) = handle_peer_requests_fq.next() => {
-                    peer_to_tx.remove(&peer_id);
+                    let _ = peer_to_tx.remove(&peer_id);
                     log::info!("Peer: {} closed {:?}", hex::encode(peer_id), res);
                     ()
                 }
@@ -334,7 +332,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                 if let Some(tx) = peer_to_tx.get(&req.peer_id) {
                     let req_msg = Messages::Request { index: req.index, begin: req.begin, length: req.length };
                     if let Err(_) = tx.send(req_msg).await {
-                        peers_closed.insert(req.peer_id);
+                        let _ = peers_closed.insert(req.peer_id);
                     }
                 }
             }
@@ -343,7 +341,8 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         log::debug!("Peers with closed channels: {:?}", peers_closed);
 
         for peer_closed in peers_closed.into_iter() {
-            peer_to_tx.remove(&peer_closed);
+            let _ = peer_to_tx.remove(&peer_closed);
+            let _ = state.torrent_state.remove_peer(Arc::clone(&peer_closed));
         }
     }
 
@@ -378,7 +377,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
     /// Handle all incoming state updates from a single peer, and requests
     async fn inner_handle_peer_msgs(
         state: Arc<Mutex<Self>>,
-        mut tx: Sender<Messages>,
+        tx: Sender<Messages>,
         mut rx: Receiver<Messages>,
         handshake: Handshake,
     ) -> Result<()> {
@@ -474,7 +473,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                         .map(|(idx, _)| idx);
 
                     if let Some(idx) = idx_to_remove_opt {
-                        outstanding_requests.remove(idx);
+                        let _ = outstanding_requests.remove(idx);
                     }
                 }
                 Messages::Piece {
@@ -566,7 +565,7 @@ mod test {
     #[tokio::test]
     async fn on_connection_bitfield_and_choke_are_sent() {
         env_logger::init();
-        let (handle, msg_tx, mut msg_rx) = setup_test().await;
+        let (_, msg_tx, mut msg_rx) = setup_test().await;
         let msgs = wait_rx(&mut msg_rx, Duration::from_secs(2), 3).await;
         // initial message
         assert_eq!(msgs.len(), 3);

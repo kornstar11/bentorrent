@@ -1,23 +1,32 @@
 use std::marker::PhantomData;
 
 use bytes::BytesMut;
+use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, sync::mpsc::{self, Sender}};
 use anyhow::Result;
 use crate::{model::TrackerResponse, peer::{error::PeerError, protocol::{Decode, Encode, HandshakeDecoder, MessagesDecoder}, state::PeerStartMessage}};
 
 pub async fn connect_torrent_peers(tracker_resp: TrackerResponse, tx: Sender<PeerStartMessage>) -> Result<()> {
 
+    let mut active_conns = FuturesUnordered::new();
+    log::debug!("Begin initial connection to peers: {:?}", tracker_resp.peers);
     for peer in tracker_resp.peers.into_iter() {
+        log::info!("Attempting to connect to {:?}", peer.socket_addr());
         let stream = TcpStream::connect(peer.socket_addr()).await;
         match stream {
             Ok(stream) => {
-                tokio::spawn(run_connection(stream, tx.clone()));
+                log::info!("Connected to {:?}", peer.address);
+                active_conns.push(run_connection(stream, tx.clone()));
             },
             Err(e) => {
                 log::warn!("Unable to connect to peer: ip={:?}, err={:?}", peer.socket_addr(), e);
             }
         }
     }
+    while let Some(r) = active_conns.next().await {
+        log::info!("Connection finished: {:?}", r);
+    }
+
     Ok(())
 }
 
@@ -99,7 +108,7 @@ impl <T: Encode, D: Decode<T = T>> Connection<D> {
     pub async fn write_msg(&mut self, msg: T) -> Result<()> {
         let mut b = BytesMut::new();
         msg.encode(&mut b);
-        self.stream.write_buf(&mut b).await?;
+        self.stream.write_all_buf(&mut b).await?;
         Ok(())
     }
 }
