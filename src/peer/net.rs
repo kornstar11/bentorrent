@@ -56,27 +56,6 @@ async fn run_connection(mut stream: TcpStream, tx: Sender<PeerStartMessage>) -> 
     Ok(())
 }
 
-// enum ConnectionStage {
-//     Begin(Connection<HandshakeDecoder>),
-//     Running(Connection<MessagesDecoder>)
-// } 
-
-// impl ConnectionStage {
-//     fn begin(stream: TcpStream) -> Self {
-//         Self::Begin(Connection::new(stream))
-//     }
-
-//     fn translate(stage: Self) -> Self {
-//         match stage {
-//             ConnectionStage::Begin(begin) => {
-//                 ConnectionStage::Running(begin.translate())
-//             },
-//             ConnectionStage::Running(running) => {
-//                 ConnectionStage::Running(running)
-//             }
-//         }
-//     }
-// }
 pub struct Connection<D> {
     stream: TcpStream,
     buffer: BytesMut,
