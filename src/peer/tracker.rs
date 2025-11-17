@@ -64,6 +64,7 @@ impl TrackerClient {
             .append_pair("uploaded", &format!("{}", self.upload_download_state.get_uploaded()))
             .append_pair("downloaded", &format!("{}", self.upload_download_state.get_downloaded()))
             .append_pair("left", &self.torrent.info.length.to_string())
+            .append_pair("numwant", "100")
             .finish();
 
         format!(
