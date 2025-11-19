@@ -65,7 +65,7 @@ pub fn make_peer_id() -> InternalPeerId {
 // pub async fn start_processing(torrent: V1Torrent, config: Config) -> Result<()> {
 // }
 
-async fn inner_start_processing(torrent: V1Torrent, torrent_processor: TorrentProcessor, our_id: InternalPeerId) -> Result<()> {
+async fn inner_start_processing(torrent: V1Torrent, torrent_processor: TorrentProcessor, our_id: InternalPeerId, config: Config) -> Result<()> {
     let client = Client::new();
     log::info!("Torrent start: our_id={}, torrent_len={}, piece_len={}", hex::encode(our_id.as_ref()), torrent.info.length, torrent.info.piece_length);
 
@@ -79,7 +79,7 @@ async fn inner_start_processing(torrent: V1Torrent, torrent_processor: TorrentPr
     let tracker_response = tracker_client.get_announce().await?;
     log::info!("Tracker responds: peers_availiable={}", tracker_response.peers.len());
 
-    let connections = connect_torrent_peers(torrent, our_id, tracker_response, conn_tx);
+    let connections = connect_torrent_peers(torrent, our_id, tracker_response, conn_tx, config);
 
     tokio::select! {
         _ = torrent_processor_task => {
@@ -101,7 +101,7 @@ pub async fn start_processing(torrent: V1Torrent, config: Config) -> Result<()> 
         Box::new(MemoryTorrentWriter::new(torrent.clone()).await)
     };
     let torrent_processor = TorrentProcessor::new(Arc::clone(&our_id), torrent.clone(), torrent_writer);
-    inner_start_processing(torrent, torrent_processor, our_id).await
+    inner_start_processing(torrent, torrent_processor, our_id, config).await
 
 }
 

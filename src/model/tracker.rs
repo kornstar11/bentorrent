@@ -4,7 +4,6 @@ use crate::file::{Bencode, Error, map_dict_keys};
 
 #[derive(Debug, Clone)]
 pub struct TrackerPeer {
-    pub peer_id: Vec<u8>,
     pub address: IpAddr,
     pub port: u16,
 }
@@ -30,16 +29,15 @@ impl<'a> TryFrom<Bencode<'a>> for TrackerPeer {
         if let Bencode::Dictionary(dict) = value {
             let mut dict = map_dict_keys(dict);
             if let (
-                Some(Bencode::ByteString(peer_id)),
                 Some(Bencode::ByteString(ip)),
                 Some(Bencode::Int(port))
-            ) = (dict.remove("peer id"), dict.remove("ip"), dict.remove("port")) {
+            ) = (dict.remove("ip"), dict.remove("port")) {
                 let ip  = ip
                     .to_string();
                 let ip  = IpAddr::from_str(&ip)
                     .map_err(|err| Error::BencodeParse(err.to_string()))?;
+
                 return Ok(TrackerPeer { 
-                    peer_id: peer_id.elements.to_vec(),
                     address: ip,
                     port: port as _ 
                 })
@@ -54,10 +52,10 @@ impl<'a> TryFrom<Bencode<'a>> for TrackerPeer {
 }
 #[derive(Debug, Clone)]
 pub struct TrackerResponse {
-    pub complete: i64,
-    pub incomplete: i64,
     pub interval: i64,
-    pub peers: Vec<TrackerPeer>
+    pub peers: Vec<TrackerPeer>,
+    pub complete: Option<i64>,
+    pub incomplete: Option<i64>,
 }
 
 impl<'a> TryFrom<Bencode<'a>> for TrackerResponse {
@@ -67,11 +65,21 @@ impl<'a> TryFrom<Bencode<'a>> for TrackerResponse {
         if let Bencode::Dictionary(dict) = value {
             let mut dict = map_dict_keys(dict);
             if let (
-                Some(Bencode::Int(complete)),
-                Some(Bencode::Int(incomplete)),
                 Some(Bencode::Int(interval)),
                 Some(Bencode::List(peers)),
-            ) = (dict.remove("complete"), dict.remove("incomplete"), dict.remove("interval"), dict.remove("peers")) {
+                complete,
+                incomplete,
+            ) = (dict.remove("interval"), dict.remove("peers"), dict.remove("complete"), dict.remove("incomplete")) {
+                let complete = if let Some(Bencode::Int(i)) = complete {
+                    Some(i)
+                } else {
+                    None
+                };
+                let incomplete = if let Some(Bencode::Int(i)) = incomplete {
+                    Some(i)
+                } else {
+                    None
+                };
                 let peers = peers
                     .into_iter()
                     .map(|peer| {

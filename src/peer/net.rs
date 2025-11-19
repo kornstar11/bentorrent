@@ -1,26 +1,39 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use bytes::{Buf, BytesMut, TryGetError};
 use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, sync::mpsc::{self, Sender}};
 use anyhow::Result;
-use crate::{model::{PeerContext, TrackerResponse, V1Torrent}, peer::{InternalPeerId, PIECE_BLOCK_SIZE, error::PeerError, protocol::{Decode, Encode, Handshake, HandshakeDecoder, MessagesDecoder, ProtocolError}, state::PeerStartMessage}};
+use crate::{config::Config, model::{PeerContext, TrackerResponse, V1Torrent}, peer::{InternalPeerId, PIECE_BLOCK_SIZE, error::PeerError, protocol::{Decode, Encode, Handshake, HandshakeDecoder, MessagesDecoder, ProtocolError}, state::PeerStartMessage}};
 
-pub async fn connect_torrent_peers(torrent: V1Torrent, our_id: InternalPeerId, tracker_resp: TrackerResponse, tx: Sender<PeerStartMessage>) -> Result<()> {
+pub async fn connect_torrent_peers(torrent: V1Torrent, our_id: InternalPeerId, tracker_resp: TrackerResponse, tx: Sender<PeerStartMessage>, config: Config) -> Result<()> {
     let mut active_conns = FuturesUnordered::new();
     log::debug!("Begin initial connection to peers: {:?}", tracker_resp.peers);
 
-    for peer in tracker_resp.peers.into_iter() {
-        let stream = TcpStream::connect(peer.socket_addr()).await;
-        match stream {
-            Ok(stream) => {
-                log::info!("Connected to {:?}", peer.address);
-                active_conns.push(run_connection(torrent.clone(), Arc::clone(&our_id), stream, tx.clone()));
-            },
-            Err(e) => {
-                log::warn!("Unable to connect to peer: ip={:?}, err={:?}", peer.socket_addr(), e);
-            }
+    for peer in tracker_resp.peers.iter().into_iter() {
+        if active_conns.len() >= config.max_conns {
+            break;
         }
+        log::debug!("Attempting to connect to {:?}", peer);
+        //let stream = TcpStream::connect(peer.socket_addr()).await;
+        if let Ok(stream) = tokio::time::timeout(
+            Duration::from_secs(1), 
+            TcpStream::connect(peer.socket_addr())
+        ).await {
+            match stream {
+                Ok(stream) => {
+                    log::info!("Connected to {:?}", peer.address);
+                    active_conns.push(run_connection(torrent.clone(), Arc::clone(&our_id), stream, tx.clone()));
+                },
+                Err(e) => {
+                    log::warn!("Unable to connect to peer: ip={:?}, err={:?}", peer.socket_addr(), e);
+                }
+            }
+        } else {
+            log::warn!("Connection timeout {:?}", peer);
+        }
+
+       
     }
     log::info!("Peer connections spawned: {}", active_conns.len());
     while let Some(r) = active_conns.next().await {
