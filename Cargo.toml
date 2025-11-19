@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+async-trait = "0.1"
 anyhow = "1.0.100"
 bytes = "1"
 env_logger = "0.11"
@@ -13,6 +14,7 @@ log = "0.4"
 nom = "8.0.0"
 sha1 = "0.10"
 thiserror = "2.0.17"
+#tempfile = "3.23"
 tokio = { version = "1", features = ["full"] }
 url = "2.5"
 urlencoding = "2.1.3"

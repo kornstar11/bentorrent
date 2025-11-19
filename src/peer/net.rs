@@ -11,7 +11,6 @@ pub async fn connect_torrent_peers(torrent: V1Torrent, our_id: InternalPeerId, t
     log::debug!("Begin initial connection to peers: {:?}", tracker_resp.peers);
 
     for peer in tracker_resp.peers.into_iter() {
-        log::info!("Attempting to connect to {:?}", peer.socket_addr());
         let stream = TcpStream::connect(peer.socket_addr()).await;
         match stream {
             Ok(stream) => {

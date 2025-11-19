@@ -48,6 +48,7 @@ impl TrackerClient {
 
     pub async fn get_announce(&self) -> Result<TrackerResponse> {
         let url = self.tracker_url();
+        log::info!("Tracker URL: {}", url);
         let res = self.client.get(url).send().await?;
         let text = res.bytes().await?;
         let decoded = parse_bencode(&text)?;
@@ -65,6 +66,7 @@ impl TrackerClient {
             .append_pair("downloaded", &format!("{}", self.upload_download_state.get_downloaded()))
             .append_pair("left", &self.torrent.info.length.to_string())
             .append_pair("numwant", "100")
+            //.append_pair("compact", "1")
             .finish();
 
         format!(

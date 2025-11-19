@@ -13,7 +13,7 @@ use sha1::Digest;
 use reqwest::Client;
 pub use tracker::TrackerClient;
 
-use crate::{model::V1Torrent, peer::{net::connect_torrent_peers, state::TorrentProcessor, writer::MemoryTorrentWriter}};
+use crate::{config::Config, model::V1Torrent, peer::{net::connect_torrent_peers, state::TorrentProcessor, writer::{FileWriter, MemoryTorrentWriter, TorrentWriter}}};
 
 pub type PeerId = Vec<u8>;
 pub type InternalPeerId = Arc<PeerId>;
@@ -42,6 +42,14 @@ impl TorrentAllocation {
             last_piece_size,
         }
     }
+
+    pub fn piece_len(&self, piece_idx: usize) -> usize {
+        if piece_idx == self.total_pieces - 1 {
+            self.last_piece_size
+        } else {
+            self.max_piece_size
+        }
+    }
 }
 
 pub fn make_peer_id() -> InternalPeerId {
@@ -54,15 +62,14 @@ pub fn make_peer_id() -> InternalPeerId {
     return Arc::new(sha1.finalize().to_vec());
 }
 
-pub async fn start_processing(torrent: V1Torrent) -> Result<()> {
+// pub async fn start_processing(torrent: V1Torrent, config: Config) -> Result<()> {
+// }
+
+async fn inner_start_processing(torrent: V1Torrent, torrent_processor: TorrentProcessor, our_id: InternalPeerId) -> Result<()> {
     let client = Client::new();
-    let our_id = make_peer_id();
     log::info!("Torrent start: our_id={}, torrent_len={}, piece_len={}", hex::encode(our_id.as_ref()), torrent.info.length, torrent.info.piece_length);
 
     let (conn_tx, conn_rx) = tokio::sync::mpsc::channel(1);
-
-    let torrent_writer = MemoryTorrentWriter::new(torrent.clone());
-    let torrent_processor = TorrentProcessor::new(Arc::clone(&our_id), torrent.clone(), torrent_writer);
 
     let torrent_processor_task = tokio::spawn(async move {
         torrent_processor.start(conn_rx).await
@@ -84,6 +91,17 @@ pub async fn start_processing(torrent: V1Torrent) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub async fn start_processing(torrent: V1Torrent, config: Config) -> Result<()> {
+    let our_id = make_peer_id();
+    let torrent_writer: Box<dyn TorrentWriter> = if config.use_file_writer {
+        Box::new(FileWriter::new(torrent.clone()).await?)
+    } else {
+        Box::new(MemoryTorrentWriter::new(torrent.clone()).await)
+    };
+    let torrent_processor = TorrentProcessor::new(Arc::clone(&our_id), torrent.clone(), torrent_writer);
+    inner_start_processing(torrent, torrent_processor, our_id).await
 
 }
 

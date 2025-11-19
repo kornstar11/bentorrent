@@ -11,8 +11,7 @@ use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use super::protocol::Messages;
@@ -219,9 +218,18 @@ impl TorrentState {
     }
 
     pub fn set_piece_started(&mut self, piece_id: u32) {
-            let _ = self.pieces_not_started.remove(&piece_id);
-            let _ = self.pieces_started.insert(piece_id);
+        let _ = self.pieces_not_started.remove(&piece_id);
+        let _ = self.pieces_started.insert(piece_id);
     }
+
+    pub fn set_piece_finished(&mut self, piece_id: u32) {
+        let _ = self.pieces_started.remove(&piece_id);
+        let _ = self.pieces_finished.insert(piece_id);
+    }
+
+    // pub fn download_done(&self) -> bool {
+    //     self.pieces_finished.len() == 
+    // }
 
     pub fn peer_willing_to_upload_pieces(&mut self) -> HashMap<u32, HashSet<InternalPeerId>> {
         let peer_we_can_download_from = self.peers_that_choke(false);
@@ -249,15 +257,15 @@ impl TorrentState {
     }
 }
 
-pub struct TorrentProcessor<W> {
+pub struct TorrentProcessor {
     our_id: InternalPeerId,
     torrent: V1Torrent,
     torrent_state: TorrentState,
-    torrent_writer: W,
+    torrent_writer: Box<dyn TorrentWriter>,
 }
 
-impl<W: TorrentWriter> TorrentProcessor<W> {
-    pub fn new(our_id: InternalPeerId, torrent: V1Torrent, torrent_writer: W) -> Self {
+impl TorrentProcessor {
+    pub fn new(our_id: InternalPeerId, torrent: V1Torrent, torrent_writer: Box<dyn TorrentWriter>) -> Self {
         let torrent_state = TorrentState::new(&torrent.info.pieces);
         Self {
             our_id,
@@ -272,6 +280,8 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         let state = Arc::new(Mutex::new(self));
         let mut peer_to_tx: PeerToSender = HashMap::new();
         let mut handle_peer_requests_fq = FuturesUnordered::new();
+        let (wake_up_tx, mut wake_up_rx) = mpsc::channel(1);
+
 
         loop {
             tokio::select! {
@@ -281,7 +291,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                     // send peer back state needed, pieces we have and the choke, interested
                     if let Ok(_) = Self::init_connection(Arc::clone(&state), &mut tx).await {
                         let _ = peer_to_tx.insert(Arc::new(handshake.peer_ctx.peer_id.clone()), tx.clone());
-                        handle_peer_requests_fq.push(Self::handle_peer_msgs(Arc::clone(&state), tx, rx, handshake));
+                        handle_peer_requests_fq.push(Self::handle_peer_msgs(Arc::clone(&state), tx, rx, handshake, wake_up_tx.clone()));
                     } else {
                         log::warn!("Unable to initialize connection {:?}", handshake);
                     }
@@ -294,10 +304,11 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                     log::info!("Peer: {} closed {:?}", hex::encode(peer_id.as_ref()), res);
                     ()
                 }
-                _ = tokio::time::sleep(Duration::from_secs(1)) => {
-                    log::debug!("Wake up...");
-                    // we wake up here so that we occasionally complete the loop, and compute the requests
-                }
+                Some(_) = wake_up_rx.recv() => {},
+                // _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                //     log::trace!("Wake up...");
+                //     // we wake up here so that we occasionally complete the loop, and compute the requests
+                // }
                 else => break,
             }
 
@@ -366,9 +377,10 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         tx: Sender<Messages>,
         rx: Receiver<Messages>,
         handshake: Handshake,
+        wake_tx: Sender<InternalPeerId>,
     ) -> (InternalPeerId, Result<()>) {
         let peer_id = Arc::new(handshake.peer_ctx.peer_id.clone());
-        let res = Self::inner_handle_peer_msgs(Arc::clone(&peer_id), state, tx, rx).await;
+        let res = Self::inner_handle_peer_msgs(Arc::clone(&peer_id), state, tx, rx, wake_tx).await;
         (peer_id, res)
     }
 
@@ -379,6 +391,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
         state: Arc<Mutex<Self>>,
         tx: Sender<Messages>,
         mut rx: Receiver<Messages>,
+        wake_tx: Sender<InternalPeerId>,
     ) -> Result<()> {
         log::info!("Starting torrent processing...");
         let mut outstanding_requests = vec![];
@@ -405,7 +418,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                 Messages::Have { piece_index } => {
                     let interest_change = state
                         .torrent_state
-                        .add_pieces_for_peer(peer_id, vec![piece_index]);
+                        .add_pieces_for_peer(Arc::clone(&peer_id), vec![piece_index]);
                     if let Some(interest) = interest_change {
                         let msg = FlagMessages::interest_msg(interest);
                         log::debug!("Signal interest..");
@@ -413,6 +426,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                             break;
                         }
                     }
+                    wake_tx.send(peer_id).await?;
                 }
                 Messages::BitField { bitfield } => {
                     let bitfield: BitFieldReaderIter = BitFieldReader::from(bitfield).into();
@@ -425,7 +439,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                     log::info!("Bitfield: peer_id={}, has={:?}", hex::encode(peer_id.as_ref()), pieces_present);
                     let interest_change = state
                         .torrent_state
-                        .add_pieces_for_peer(peer_id, pieces_present);
+                        .add_pieces_for_peer(Arc::clone(&peer_id), pieces_present);
 
                     if let Some(interest) = interest_change {
                         let msg = FlagMessages::interest_msg(interest);
@@ -434,6 +448,7 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                             break;
                         }
                     }
+                    wake_tx.send(peer_id).await?;
                 }
                 Messages::Request {
                     index,
@@ -482,10 +497,15 @@ impl<W: TorrentWriter> TorrentProcessor<W> {
                     begin,
                     block,
                 } => {
-                    state
+                    let finished = state
                         .torrent_writer
                         .write_piece(index, begin, block)
                         .await?;
+
+                    if finished {
+                        log::info!("Piece done! piece={}", index);
+                        state.torrent_state.set_piece_finished(index);
+                    }
                 }
             }
         }
@@ -525,8 +545,8 @@ mod test {
 
     async fn setup_test() -> (JoinHandle<()>, Sender<Messages>, Receiver<Messages>) {
         let torrent = torrent_fixture(vec![1 as u8, 20]);
-        let torrent_writer = MemoryTorrentWriter::new(torrent.clone());
-        let processor = TorrentProcessor::new(Arc::new(vec![1,2,3]), torrent.clone(), torrent_writer);
+        let torrent_writer = MemoryTorrentWriter::new(torrent.clone()).await;
+        let processor = TorrentProcessor::new(Arc::new(vec![1,2,3]), torrent.clone(), Box::new(torrent_writer));
 
         // channel for new connections
         let (conn_tx, conn_rx) = channel(1);
