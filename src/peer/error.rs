@@ -13,3 +13,9 @@ pub enum PeerError {
     #[error("Error: {0}")]
     Other(String)
 }
+
+impl PeerError {
+    pub fn other(msg: &str) -> PeerError {
+        PeerError::Other(msg.to_string())
+    }
+}

@@ -256,7 +256,12 @@ impl TorrentState {
         return Arc::into_inner(peer_id);
     }
 }
+pub type InternalTorrentWriter = Arc<Mutex<Box<dyn TorrentWriter>>>;
 
+struct InnerTorrentState {
+    torrent: V1Torrent,
+    torrent_state: TorrentState,
+}
 pub struct TorrentProcessor {
     our_id: InternalPeerId,
     torrent: V1Torrent,
@@ -273,15 +278,20 @@ impl TorrentProcessor {
             torrent_state,
             torrent_writer,
         }
-        
+    }
+    fn into(self) -> (InnerTorrentState, InternalTorrentWriter) {
+        (InnerTorrentState {
+            torrent: self.torrent,
+            torrent_state: self.torrent_state,
+        }, Arc::new(Mutex::new(self.torrent_writer)))
     }
     pub async fn start(self, mut rx: Receiver<PeerStartMessage>) {
         log::info!("torrent state processor starting... {}", hex::encode(self.our_id.as_ref()));
-        let state = Arc::new(Mutex::new(self));
+        let (state, writer) = self.into();
+        let state = Arc::new(Mutex::new(state));
         let mut peer_to_tx: PeerToSender = HashMap::new();
         let mut handle_peer_requests_fq = FuturesUnordered::new();
-        let (wake_up_tx, mut wake_up_rx) = mpsc::channel(1);
-
+        let (wake_up_tx, mut wake_up_rx) = mpsc::channel(10);
 
         loop {
             tokio::select! {
@@ -290,8 +300,9 @@ impl TorrentProcessor {
                     log::info!("Accepting peer {}", hex::encode(&handshake.peer_ctx.peer_id));
                     // send peer back state needed, pieces we have and the choke, interested
                     if let Ok(_) = Self::init_connection(Arc::clone(&state), &mut tx).await {
+                        log::info!("initial messages sent to {}", hex::encode(&handshake.peer_ctx.peer_id));
                         let _ = peer_to_tx.insert(Arc::new(handshake.peer_ctx.peer_id.clone()), tx.clone());
-                        handle_peer_requests_fq.push(Self::handle_peer_msgs(Arc::clone(&state), tx, rx, handshake, wake_up_tx.clone()));
+                        handle_peer_requests_fq.push(Self::handle_peer_msgs(Arc::clone(&state), Arc::clone(&writer), tx, rx, handshake, wake_up_tx.clone()));
                     } else {
                         log::warn!("Unable to initialize connection {:?}", handshake);
                     }
@@ -304,24 +315,33 @@ impl TorrentProcessor {
                     log::info!("Peer: {} closed {:?}", hex::encode(peer_id.as_ref()), res);
                     ()
                 }
-                Some(_) = wake_up_rx.recv() => {},
-                // _ = tokio::time::sleep(Duration::from_secs(1)) => {
-                //     log::trace!("Wake up...");
-                //     // we wake up here so that we occasionally complete the loop, and compute the requests
+                Some(_) = wake_up_rx.recv() => {
+                    Self::compute_requests(Arc::clone(&state), &mut peer_to_tx).await;
+                },
+                // _ = timeout_fut.tick() => {
+                //     let locked_state = state.lock().await;
+                //     let percent_completed = (locked_state.torrent_state.pieces_finished.len() as f64) / (locked_state.torrent.info.pieces.len() as f64);
+                //     log::info!("stats: pieces_not_started={}, pieces_started={}, pieces_finished={}, percent_finished={}", 
+                //         locked_state.torrent_state.pieces_not_started.len(),
+                //         locked_state.torrent_state.pieces_started.len(),
+                //         locked_state.torrent_state.pieces_finished.len(),
+                //         percent_completed
+                //     );
                 // }
                 else => break,
             }
-
-            Self::compute_requests(Arc::clone(&state), &mut peer_to_tx).await;
+            log::debug!("Select finished");
+            
         }
         log::info!("Closing main state loop...")
     }
 
     ///
     /// Compute peers with pieces we want, and that are willing to share. Then begin to dispatch requests to them
-    async fn compute_requests(state: Arc<Mutex<Self>>, peer_to_tx: &mut PeerToSender) {
+    async fn compute_requests(state: Arc<Mutex<InnerTorrentState>>, peer_to_tx: &mut PeerToSender) {
+        log::debug!("Computing peer requests start lock");
         let mut locked_state = state.lock().await;
-        log::trace!("Computing peer requests {:?}", locked_state.torrent_state);
+        log::debug!("Computing peer requests {:?}", locked_state.torrent_state);
         let torrent = locked_state.torrent.clone();
         let block_to_request_tracker = locked_state
             .torrent_state
@@ -334,22 +354,37 @@ impl TorrentProcessor {
             }).take(MAX_OUTSTANDING_REQUESTS)
             .collect::<HashMap<_, _>>();
 
-        log::debug!("Computed requests to peer: pieces_not_started={} requests_made={}", 
+        let percent_completed = ((locked_state.torrent_state.pieces_finished.len() as f64) / (locked_state.torrent.info.pieces.len() as f64)) * 100.0;
+        log::info!("stats: pieces_not_started={}, pieces_started={}, pieces_finished={}, total_pieces={}, percent_finished={}", 
             locked_state.torrent_state.pieces_not_started.len(),
-            block_to_request_tracker.len()
+            locked_state.torrent_state.pieces_started.len(),
+            locked_state.torrent_state.pieces_finished.len(),
+            locked_state.torrent.info.pieces.len(),
+            percent_completed
         );
+        
 
         for (piece_id, tracker) in block_to_request_tracker.into_iter() {
             log::debug!("Dispatch request for piece_id {}", piece_id);
-            locked_state
-                .torrent_state
-                .set_piece_started(piece_id);
-            for req in tracker.requests_to_make {
-                log::debug!("Attempting to send request {:?}", req);
-                if let Some(tx) = peer_to_tx.get(&req.peer_id) {
-                    let req_msg = Messages::Request { index: req.index, begin: req.begin, length: req.length };
-                    if let Err(_) = tx.send(req_msg).await {
-                        log::debug!("Got closed tx: {}", hex::encode(req.peer_id.as_ref()));
+            let grouped = tracker.requests_to_make.iter().fold(HashMap::new(), |mut acc, e| {
+                let entry = acc.entry((e.peer_id.clone(), e.index)).or_insert_with(|| vec![]);
+                entry.push(e);
+                acc
+            });
+            for ((peer_id, piece_id), reqs) in grouped {
+                log::debug!("Attempting to send piece_id {}", piece_id);
+                if let Some(tx) = peer_to_tx.get(&peer_id) {
+                    if let Ok(perm_it) = tx.try_reserve_many(reqs.len()) {
+                        log::debug!("managed to reserve piece_id={}, len={}", piece_id, reqs.len());
+                        for (perm, req) in perm_it.zip(reqs) {
+                            let req_msg = Messages::Request { index: req.index, begin: req.begin, length: req.length };
+                            perm.send(req_msg);
+                        }
+                        locked_state
+                            .torrent_state
+                            .set_piece_started(piece_id);
+                    } else {
+                        log::warn!("Sending requests would fail... skipping.... piece_id={}", piece_id);
                     }
                 }
             }
@@ -358,7 +393,7 @@ impl TorrentProcessor {
 
     ///
     /// Send out the initial bitfield message to inform the peer of our peices
-    async fn init_connection(state: Arc<Mutex<Self>>, tx: &mut Sender<Messages>) -> Result<()> {
+    async fn init_connection(state: Arc<Mutex<InnerTorrentState>>, tx: &mut Sender<Messages>) -> Result<()> {
         let state = state.lock().await;
         let mut bitfield = BitFieldWriter::new(BytesMut::new());
         bitfield.put_bit_set(&state.torrent_state.pieces_finished, state.torrent.info.pieces.len());
@@ -373,14 +408,15 @@ impl TorrentProcessor {
     ///
     /// Maps the result so that we always return the peer_id
     async fn handle_peer_msgs(
-        state: Arc<Mutex<Self>>,
+        state: Arc<Mutex<InnerTorrentState>>,
+        writer: InternalTorrentWriter,
         tx: Sender<Messages>,
         rx: Receiver<Messages>,
         handshake: Handshake,
         wake_tx: Sender<InternalPeerId>,
     ) -> (InternalPeerId, Result<()>) {
         let peer_id = Arc::new(handshake.peer_ctx.peer_id.clone());
-        let res = Self::inner_handle_peer_msgs(Arc::clone(&peer_id), state, tx, rx, wake_tx).await;
+        let res = Self::inner_handle_peer_msgs(Arc::clone(&peer_id), state, writer, tx, rx, wake_tx).await;
         (peer_id, res)
     }
 
@@ -388,34 +424,39 @@ impl TorrentProcessor {
     /// Handle all incoming state updates from a single peer, and requests
     async fn inner_handle_peer_msgs(
         peer_id: InternalPeerId,
-        state: Arc<Mutex<Self>>,
+        state: Arc<Mutex<InnerTorrentState>>,
+        writer: InternalTorrentWriter,
         tx: Sender<Messages>,
         mut rx: Receiver<Messages>,
         wake_tx: Sender<InternalPeerId>,
     ) -> Result<()> {
         log::info!("Starting torrent processing...");
-        let mut outstanding_requests = vec![];
+        let mut outstanding_requests = vec![]; //from peer
 
         while let Some(msg) = rx.recv().await {
             let peer_id = Arc::clone(&peer_id);
-            let mut state = state.lock().await;
 
-            log::debug!("Message: peer_id={}, msg={:?}", hex::encode(peer_id.as_ref()), msg);
+            //log::debug!("Message: peer_id={}, msg={:?}", hex::encode(peer_id.as_ref()), msg);
             match msg {
                 Messages::KeepAlive => {
                     // TODO reset timer or something, and expire after xx time
                 }
-                Messages::Flag(flag) => match flag {
-                    FlagMessages::Choke => state.torrent_state.set_peer_choked_us(peer_id, true),
-                    FlagMessages::Unchoke => state.torrent_state.set_peer_choked_us(peer_id, false),
-                    FlagMessages::Interested => state
-                        .torrent_state
-                        .set_peers_interested_in_us(peer_id, true),
-                    FlagMessages::NotInterested => state
-                        .torrent_state
-                        .set_peers_interested_in_us(peer_id, false),
+                Messages::Flag(flag) => {
+                    let mut state = state.lock().await;
+                    match flag {
+                        FlagMessages::Choke => state.torrent_state.set_peer_choked_us(Arc::clone(&peer_id), true),
+                        FlagMessages::Unchoke => state.torrent_state.set_peer_choked_us(Arc::clone(&peer_id), false),
+                        FlagMessages::Interested => state
+                            .torrent_state
+                            .set_peers_interested_in_us(Arc::clone(&peer_id), true),
+                        FlagMessages::NotInterested => state
+                            .torrent_state
+                            .set_peers_interested_in_us(Arc::clone(&peer_id), false),
+                    };
+                    wake_tx.send(Arc::clone(&peer_id)).await?;
                 },
                 Messages::Have { piece_index } => {
+                    let mut state = state.lock().await;
                     let interest_change = state
                         .torrent_state
                         .add_pieces_for_peer(Arc::clone(&peer_id), vec![piece_index]);
@@ -429,6 +470,7 @@ impl TorrentProcessor {
                     wake_tx.send(peer_id).await?;
                 }
                 Messages::BitField { bitfield } => {
+                    let mut state = state.lock().await;
                     let bitfield: BitFieldReaderIter = BitFieldReader::from(bitfield).into();
                     let pieces_present = bitfield
                         .into_iter()
@@ -436,7 +478,7 @@ impl TorrentProcessor {
                         .filter(|(_, was_set)| *was_set)
                         .map(|(block, _)| block as u32)
                         .collect::<Vec<_>>();
-                    log::info!("Bitfield: peer_id={}, has={:?}", hex::encode(peer_id.as_ref()), pieces_present);
+
                     let interest_change = state
                         .torrent_state
                         .add_pieces_for_peer(Arc::clone(&peer_id), pieces_present);
@@ -455,6 +497,7 @@ impl TorrentProcessor {
                     begin,
                     length,
                 } => {
+                    let state = state.lock().await;
                     let choked = state
                         .torrent_state
                         .get_internal_peer_state(&peer_id).map(|peer_state| peer_state.choked)
@@ -497,14 +540,18 @@ impl TorrentProcessor {
                     begin,
                     block,
                 } => {
-                    let finished = state
-                        .torrent_writer
-                        .write_piece(index, begin, block)
-                        .await?;
+                    let finished = {
+                        let mut writer = writer.lock().await;
+                        writer
+                            .write_piece(index, begin, block)
+                            .await?
+                    };
 
+                    let mut state = state.lock().await;
                     if finished {
-                        log::info!("Piece done! piece={}", index);
+                        log::debug!("Piece done! piece={}", index);
                         state.torrent_state.set_piece_finished(index);
+                        wake_tx.send(Arc::clone(&peer_id)).await?;
                     }
                 }
             }
@@ -527,8 +574,8 @@ mod test {
     use super::*;
 
     fn peer_start_fixture(info_hash: &Vec<u8>) -> (PeerStartMessage, Sender<Messages>, Receiver<Messages>) {
-        let (in_tx, in_rx) = channel(1);
-        let (out_tx, out_rx) = channel(1);
+        let (in_tx, in_rx) = channel(1024);
+        let (out_tx, out_rx) = channel(1024);
         let handshake = Handshake{
             peer_ctx: PeerContext {
                 info_hash: info_hash.clone(),
@@ -586,7 +633,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn on_connection_bitfield_and_choke_are_sent() {
+    async fn connection_handles_choke_events() {
         env_logger::init();
         let (_, msg_tx, mut msg_rx) = setup_test().await;
         let msgs = wait_rx(&mut msg_rx, Duration::from_secs(2), 3).await;
@@ -606,7 +653,7 @@ mod test {
         msg_tx.send(Messages::BitField { bitfield: all_pieces_bf }).await.unwrap();
         msg_tx.send(Messages::Flag(FlagMessages::Choke)).await.unwrap();
         msg_tx.send(Messages::Flag(FlagMessages::NotInterested)).await.unwrap();
-
+        
         //expect interest since pieces are not our own
         let msgs = wait_rx(&mut msg_rx, Duration::from_secs(2), 1).await;
         assert_eq!(msgs, vec![Messages::Flag(FlagMessages::Interested)]);
@@ -619,7 +666,7 @@ mod test {
         // send a unchoked messages
         msg_tx.send(Messages::Flag(FlagMessages::Unchoke)).await.unwrap();
         tokio::time::sleep(Duration::from_secs(5)).await;
-        let expected = (10_240_000 / 16384) + 1;
+        let expected = (10_240_000 / 16384) + 1; // expected
         let msgs = wait_rx(&mut msg_rx, Duration::from_secs(1), expected).await;
         assert_eq!(msgs.len(), expected);
     }
