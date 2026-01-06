@@ -1,15 +1,38 @@
 use std::{fmt, marker::PhantomData, sync::Arc, time::Duration};
 //use std::net::{IpAddr, Ipv4Addr};
 
+use crate::{
+    config::Config,
+    model::{PeerContext, TrackerResponse, V1Torrent},
+    peer::{
+        InternalPeerId, PIECE_BLOCK_SIZE,
+        error::PeerError,
+        protocol::{Decode, Encode, Handshake, HandshakeDecoder, MessagesDecoder, ProtocolError},
+        state::PeerStartMessage,
+    },
+};
+use anyhow::Result;
 use bytes::{Buf, BytesMut, TryGetError};
 use futures::{StreamExt, stream::FuturesUnordered};
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, sync::mpsc::{self, Sender}, time::timeout};
-use anyhow::Result;
-use crate::{config::Config, model::{PeerContext, TrackerResponse, V1Torrent}, peer::{InternalPeerId, PIECE_BLOCK_SIZE, error::PeerError, protocol::{Decode, Encode, Handshake, HandshakeDecoder, MessagesDecoder, ProtocolError}, state::PeerStartMessage}};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    sync::mpsc::{self, Sender},
+    time::timeout,
+};
 
-pub async fn connect_torrent_peers(torrent: V1Torrent, our_id: InternalPeerId, tracker_resp: TrackerResponse, tx: Sender<PeerStartMessage>, config: Config) -> Result<()> {
+pub async fn connect_torrent_peers(
+    torrent: V1Torrent,
+    our_id: InternalPeerId,
+    tracker_resp: TrackerResponse,
+    tx: Sender<PeerStartMessage>,
+    config: Config,
+) -> Result<()> {
     let mut active_conns = FuturesUnordered::new();
-    log::debug!("Begin initial connection to peers: {:?}", tracker_resp.peers);
+    log::debug!(
+        "Begin initial connection to peers: {:?}",
+        tracker_resp.peers
+    );
     //let peers = tracker_resp.peers.iter().filter(|p| p.address == IpAddr::V4(Ipv4Addr::new(188, 68, 53, 4)));
     let peers = tracker_resp.peers.iter();
     for peer in peers.into_iter() {
@@ -19,23 +42,38 @@ pub async fn connect_torrent_peers(torrent: V1Torrent, our_id: InternalPeerId, t
         log::debug!("Attempting to connect to {:?}", peer);
         //let stream = TcpStream::connect(peer.socket_addr()).await;
         if let Ok(stream) = timeout(
-            Duration::from_secs(1), 
-            TcpStream::connect(peer.socket_addr())
-        ).await {
+            Duration::from_secs(1),
+            TcpStream::connect(peer.socket_addr()),
+        )
+        .await
+        {
             match stream {
                 Ok(stream) => {
                     log::info!("Connected to {:?}", peer.address);
                     if let Ok((handshake, conn)) = timeout(
                         Duration::from_secs(1),
-                        do_handshake(torrent.clone(), Arc::clone(&our_id), stream)
-                    ).await.map_err(|e| e.into()).flatten() {
-                        active_conns.push(run_connection(handshake, conn, tx.clone(), config.clone()));
+                        do_handshake(torrent.clone(), Arc::clone(&our_id), stream),
+                    )
+                    .await
+                    .map_err(|e| e.into())
+                    .flatten()
+                    {
+                        active_conns.push(run_connection(
+                            handshake,
+                            conn,
+                            tx.clone(),
+                            config.clone(),
+                        ));
                     } else {
                         log::warn!("Failed to handshake with {:?}", peer.socket_addr());
                     }
-                },
+                }
                 Err(e) => {
-                    log::warn!("Unable to connect to peer: ip={:?}, err={:?}", peer.socket_addr(), e);
+                    log::warn!(
+                        "Unable to connect to peer: ip={:?}, err={:?}",
+                        peer.socket_addr(),
+                        e
+                    );
                 }
             }
         } else {
@@ -50,14 +88,18 @@ pub async fn connect_torrent_peers(torrent: V1Torrent, our_id: InternalPeerId, t
     Ok(())
 }
 
-async fn do_handshake(torrent: V1Torrent, our_id: InternalPeerId, stream: TcpStream) -> Result<(Handshake, Connection<MessagesDecoder>)> {
+async fn do_handshake(
+    torrent: V1Torrent,
+    our_id: InternalPeerId,
+    stream: TcpStream,
+) -> Result<(Handshake, Connection<MessagesDecoder>)> {
     let mut conn: Connection<HandshakeDecoder> = Connection::new(stream);
 
     let our_handshake = Handshake {
         peer_ctx: PeerContext {
             info_hash: torrent.info.info_hash,
-            peer_id: Vec::clone(&our_id)
-        }
+            peer_id: Vec::clone(&our_id),
+        },
     };
     conn.write_msg(our_handshake).await?;
     log::debug!("Sent handshake...");
@@ -68,11 +110,16 @@ async fn do_handshake(torrent: V1Torrent, our_id: InternalPeerId, stream: TcpStr
     }
 }
 
-async fn run_connection(handshake: Handshake, mut conn: Connection<MessagesDecoder>, tx: Sender<PeerStartMessage>, config: Config) -> Result<()> {
+async fn run_connection(
+    handshake: Handshake,
+    mut conn: Connection<MessagesDecoder>,
+    tx: Sender<PeerStartMessage>,
+    config: Config,
+) -> Result<()> {
     let (send_to_processor, send_to_processor_rx) = mpsc::channel(config.peer_rx_size); //todo: config this
     let (recv_from_processor_tx, mut recv_from_processor) = mpsc::channel(config.peer_tx_size);
 
-     let peer_msg = PeerStartMessage {
+    let peer_msg = PeerStartMessage {
         handshake,
         rx: send_to_processor_rx,
         tx: recv_from_processor_tx,
@@ -99,28 +146,38 @@ pub struct Connection<D> {
     stream: TcpStream,
     buffer: BytesMut,
     decoder: PhantomData<D>,
+    rw_timeout: Duration,
 }
 
-impl <T, D> Connection<D> where T: Encode + fmt::Debug, D: Decode<T = T> {
+impl<T, D> Connection<D>
+where
+    T: Encode + fmt::Debug,
+    D: Decode<T = T>,
+{
     pub fn new(stream: TcpStream) -> Connection<D> {
+        let default_timeout = Duration::from_secs(3);
         Connection {
             stream,
             // Allocate the buffer with 4kb of capacity.
             buffer: BytesMut::with_capacity(PIECE_BLOCK_SIZE + 4096),
-            decoder: PhantomData
+            decoder: PhantomData,
+            rw_timeout: default_timeout,
         }
     }
 
-    fn translate<OT, OD: Decode<T= OT>>(self) -> Connection<OD> {
-        Connection { stream: self.stream , buffer: self.buffer, decoder: PhantomData }
+    fn translate<OT, OD: Decode<T = OT>>(self) -> Connection<OD> {
+        Connection {
+            stream: self.stream,
+            buffer: self.buffer,
+            decoder: PhantomData,
+            rw_timeout: self.rw_timeout,
+        }
     }
 
-    pub async fn read_msg(&mut self)-> Result<Option<T>>
-    {
+    pub async fn read_msg(&mut self) -> Result<Option<T>> {
         let mut needs = 0;
         loop {
             if self.buffer.remaining() >= needs {
-
                 //let mut cloned = self.buffer.clone(); //yuck!
                 let mut read_buf = self.buffer.as_ref();
                 let remaining = read_buf.remaining();
@@ -128,11 +185,12 @@ impl <T, D> Connection<D> where T: Encode + fmt::Debug, D: Decode<T = T> {
                     Ok(msg) => {
                         let advance = remaining - read_buf.remaining();
                         self.buffer.advance(advance);
-                        return Ok(Some(msg))
-                    },
-                    Err(ProtocolError::TryGetError(TryGetError{requested, available: _})) => {
-                        needs = requested
-                    },
+                        return Ok(Some(msg));
+                    }
+                    Err(ProtocolError::TryGetError(TryGetError {
+                        requested,
+                        available: _,
+                    })) => needs = requested,
                     Err(e) => return Err(e.into()),
                 }
             }
@@ -156,10 +214,13 @@ impl <T, D> Connection<D> where T: Encode + fmt::Debug, D: Decode<T = T> {
 
     pub async fn write_msg(&mut self, msg: T) -> Result<()> {
         let mut b = BytesMut::new();
-        log::debug!("Writing: {:?} :: {:?}", self.stream, msg);
         msg.encode(&mut b);
-        self.stream.write_all_buf(&mut b).await?;
-        log::debug!("Wrote: {:?}", self.stream);
+        tokio::time::timeout(self.rw_timeout, async move {
+            self.stream.write_all_buf(&mut b).await
+        })
+        .await
+        .map_err(|_| PeerError::NetworkTimeout)??;
+        //self.stream.write_all_buf(&mut b).await?;
         Ok(())
     }
 }

@@ -90,7 +90,6 @@ impl FlagMessages {
         };
         Messages::Flag(msg)
     }
-    
 }
 
 impl TryFrom<u8> for FlagMessages {
@@ -201,7 +200,7 @@ impl Decode for MessagesDecoder {
         }
 
         if len > b.remaining() {
-            return Err(ProtocolError::TryGetError(TryGetError{
+            return Err(ProtocolError::TryGetError(TryGetError {
                 requested: len,
                 available: b.remaining(),
             }));

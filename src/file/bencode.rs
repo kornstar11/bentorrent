@@ -91,11 +91,9 @@ impl<'a> Bencode<'a> {
 }
 
 pub fn map_dict_keys<'a>(dict: DictT<'a>) -> BTreeMap<String, Bencode<'a>> {
-    dict
-        .into_iter().map(|(k,v)| {
-            (k.to_string(), v)
-        }).collect::<BTreeMap<_, _>>()
-
+    dict.into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect::<BTreeMap<_, _>>()
 }
 
 // https://en.wikipedia.org/wiki/Bencode

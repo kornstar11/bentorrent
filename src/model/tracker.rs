@@ -1,4 +1,7 @@
-use std::{net::{IpAddr, SocketAddrV4, SocketAddrV6, SocketAddr}, str::FromStr};
+use std::{
+    net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6},
+    str::FromStr,
+};
 
 use crate::file::{Bencode, Error, map_dict_keys};
 
@@ -11,44 +14,36 @@ pub struct TrackerPeer {
 impl TrackerPeer {
     pub fn socket_addr(&self) -> SocketAddr {
         match self.address {
-            IpAddr::V4(ip) => {
-                SocketAddr::V4(SocketAddrV4::new(ip, self.port))
-            },
-            IpAddr::V6(ip) => {
-                SocketAddr::V6(SocketAddrV6::new(ip, self.port, 0, 0))
-            }
+            IpAddr::V4(ip) => SocketAddr::V4(SocketAddrV4::new(ip, self.port)),
+            IpAddr::V6(ip) => SocketAddr::V6(SocketAddrV6::new(ip, self.port, 0, 0)),
         }
     }
-    
 }
 
 impl<'a> TryFrom<Bencode<'a>> for TrackerPeer {
     type Error = Error;
-    
+
     fn try_from(value: Bencode) -> Result<Self, Self::Error> {
         if let Bencode::Dictionary(dict) = value {
             let mut dict = map_dict_keys(dict);
-            if let (
-                Some(Bencode::ByteString(ip)),
-                Some(Bencode::Int(port))
-            ) = (dict.remove("ip"), dict.remove("port")) {
-                let ip  = ip
-                    .to_string();
-                let ip  = IpAddr::from_str(&ip)
-                    .map_err(|err| Error::BencodeParse(err.to_string()))?;
+            if let (Some(Bencode::ByteString(ip)), Some(Bencode::Int(port))) =
+                (dict.remove("ip"), dict.remove("port"))
+            {
+                let ip = ip.to_string();
+                let ip =
+                    IpAddr::from_str(&ip).map_err(|err| Error::BencodeParse(err.to_string()))?;
 
-                return Ok(TrackerPeer { 
+                return Ok(TrackerPeer {
                     address: ip,
-                    port: port as _ 
-                })
+                    port: port as _,
+                });
             } else {
-                return Err(Error::missing("missing peerid, ip or port"))
+                return Err(Error::missing("missing peerid, ip or port"));
             }
         } else {
             Err(Error::WrongType)
         }
     }
-    
 }
 #[derive(Debug, Clone)]
 pub struct TrackerResponse {
@@ -69,7 +64,12 @@ impl<'a> TryFrom<Bencode<'a>> for TrackerResponse {
                 Some(Bencode::List(peers)),
                 complete,
                 incomplete,
-            ) = (dict.remove("interval"), dict.remove("peers"), dict.remove("complete"), dict.remove("incomplete")) {
+            ) = (
+                dict.remove("interval"),
+                dict.remove("peers"),
+                dict.remove("complete"),
+                dict.remove("incomplete"),
+            ) {
                 let complete = if let Some(Bencode::Int(i)) = complete {
                     Some(i)
                 } else {
@@ -82,11 +82,15 @@ impl<'a> TryFrom<Bencode<'a>> for TrackerResponse {
                 };
                 let peers = peers
                     .into_iter()
-                    .map(|peer| {
-                        TrackerPeer::try_from(peer)
-                    }).flatten()
+                    .map(|peer| TrackerPeer::try_from(peer))
+                    .flatten()
                     .collect::<Vec<_>>();
-                Ok(TrackerResponse { complete, incomplete, interval, peers })
+                Ok(TrackerResponse {
+                    complete,
+                    incomplete,
+                    interval,
+                    peers,
+                })
             } else {
                 Err(Error::WrongType)
             }

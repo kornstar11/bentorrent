@@ -15,8 +15,8 @@
     while_true,
     unused_results
 )]
+pub mod config;
 pub mod file;
 pub mod model;
 pub mod peer;
 pub mod util;
-pub mod config;

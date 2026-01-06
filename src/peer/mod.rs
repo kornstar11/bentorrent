@@ -1,32 +1,35 @@
 mod bitfield;
-mod state;
 mod error;
-mod writer;
-mod protocol;
-mod tracker;
+mod io;
 mod net;
+mod protocol;
+mod state;
+mod tracker;
 
 use anyhow::Result;
-use std::{sync::Arc, time::SystemTime};
 use sha1::Digest;
+use std::{sync::Arc, time::SystemTime};
 
 use reqwest::Client;
 pub use tracker::TrackerClient;
 
-use crate::{config::Config, model::V1Torrent, peer::{net::connect_torrent_peers, state::TorrentProcessor, writer::{FileWriter, MemoryTorrentWriter, TorrentWriter}}};
-
-pub type PeerId = Vec<u8>;
-pub type InternalPeerId = Arc<PeerId>;
+use crate::{
+    config::Config,
+    model::{InternalPeerId, V1Torrent},
+    peer::{
+        io::{FileTorrentIO, IoHandler, MemoryTorrentIO, TorrentIO},
+        net::connect_torrent_peers,
+        state::TorrentProcessor,
+    },
+};
 
 pub const PIECE_BLOCK_SIZE: usize = 16_384;
-
 
 #[derive(Debug)]
 pub struct TorrentAllocation {
     total_pieces: usize,
     max_piece_size: usize,
     last_piece_size: usize,
-
 }
 
 impl TorrentAllocation {
@@ -34,7 +37,7 @@ impl TorrentAllocation {
         let total_pieces = torrent.info.pieces.len();
 
         let max_piece_size = torrent.info.piece_length as usize;
-        let last_piece_size = torrent.info.length as usize - ((total_pieces - 1) * max_piece_size);//torrent.info.length as usize % total_pieces;
+        let last_piece_size = torrent.info.length as usize - ((total_pieces - 1) * max_piece_size); //torrent.info.length as usize % total_pieces;
 
         Self {
             total_pieces,
@@ -65,19 +68,31 @@ pub fn make_peer_id() -> InternalPeerId {
 // pub async fn start_processing(torrent: V1Torrent, config: Config) -> Result<()> {
 // }
 
-async fn inner_start_processing(torrent: V1Torrent, torrent_processor: TorrentProcessor, our_id: InternalPeerId, config: Config) -> Result<()> {
+async fn inner_start_processing(
+    torrent: V1Torrent,
+    torrent_processor: TorrentProcessor,
+    our_id: InternalPeerId,
+    config: Config,
+) -> Result<()> {
     let client = Client::new();
-    log::info!("Torrent start: our_id={}, torrent_len={}, piece_len={}", hex::encode(our_id.as_ref()), torrent.info.length, torrent.info.piece_length);
+    log::info!(
+        "Torrent start: our_id={}, torrent_len={}, piece_len={}",
+        hex::encode(our_id.as_ref()),
+        torrent.info.length,
+        torrent.info.piece_length
+    );
 
     let (conn_tx, conn_rx) = tokio::sync::mpsc::channel(1);
 
-    let torrent_processor_task = tokio::spawn(async move {
-        torrent_processor.start(conn_rx).await
-    });
+    let torrent_processor_task =
+        tokio::spawn(async move { torrent_processor.start(conn_rx).await });
 
     let tracker_client = TrackerClient::new(torrent.clone(), client, Arc::clone(&our_id));
     let tracker_response = tracker_client.get_announce().await?;
-    log::info!("Tracker responds: peers_availiable={}", tracker_response.peers.len());
+    log::info!(
+        "Tracker responds: peers_availiable={}",
+        tracker_response.peers.len()
+    );
 
     let connections = connect_torrent_peers(torrent, our_id, tracker_response, conn_tx, config);
 
@@ -95,16 +110,15 @@ async fn inner_start_processing(torrent: V1Torrent, torrent_processor: TorrentPr
 
 pub async fn start_processing(torrent: V1Torrent, config: Config) -> Result<()> {
     let our_id = make_peer_id();
-    let torrent_writer: Box<dyn TorrentWriter> = if config.use_file_writer {
-        Box::new(FileWriter::new(torrent.clone()).await?)
+    let io: Box<dyn TorrentIO> = if config.use_file_writer {
+        Box::new(FileTorrentIO::new(torrent.clone()).await?)
     } else {
-        Box::new(MemoryTorrentWriter::new(torrent.clone()).await)
+        Box::new(MemoryTorrentIO::new(torrent.clone()).await)
     };
-    let torrent_processor = TorrentProcessor::new(Arc::clone(&our_id), torrent.clone(), torrent_writer);
+    let io = IoHandler::new(config.clone(), io).await?;
+    let torrent_processor = TorrentProcessor::new(Arc::clone(&our_id), torrent.clone(), io);
     inner_start_processing(torrent, torrent_processor, our_id, config).await
-
 }
-
 
 #[cfg(test)]
 mod test {
@@ -117,13 +131,13 @@ mod test {
                 piece_length: 5120000,
                 name: "test.txt".to_string(),
                 pieces: vec![
-                    V1Piece{hash: vec![11; 20]},
-                    V1Piece{hash: vec![22; 20]},
+                    V1Piece { hash: vec![11; 20] },
+                    V1Piece { hash: vec![22; 20] },
                 ],
-                info_hash
+                info_hash,
             },
             announce: String::new(),
-            announce_list: vec![]
+            announce_list: vec![],
         }
     }
 }
