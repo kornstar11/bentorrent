@@ -1,6 +1,6 @@
 //https://wiki.theory.org/BitTorrentSpecification#Tracker_HTTP.2FHTTPS_Protocol
 
-use crate::model::PeerContext;
+use crate::model::{PeerContext, PeerRequestedPiece};
 use bytes::{Buf, BufMut, TryGetError};
 use thiserror::Error;
 
@@ -130,6 +130,12 @@ pub enum Messages {
         begin: u32,
         length: u32,
     },
+}
+
+impl From<&PeerRequestedPiece> for Messages {
+    fn from(v: &PeerRequestedPiece) -> Self {
+        Messages::Request { index: v.index, begin: v.begin, length: v.length }
+    }
 }
 
 impl Encode for Messages {

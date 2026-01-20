@@ -1,16 +1,18 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::{HashMap, HashSet, VecDeque}, sync::Arc, time::Instant};
 
 use crate::{
     model::{InternalPeerId, PeerRequestedPiece, V1Torrent},
     peer::{PIECE_BLOCK_SIZE, TorrentAllocation},
 };
 
+///
+/// Per piece, we need to break it into blocks that can be requested. This helps keep track of this process
 #[derive(Debug)]
-pub struct PieceBlockTracking {
+pub struct PieceBlockAllocation {
     pub requests_to_make: Vec<PeerRequestedPiece>,
 }
 
-impl PieceBlockTracking {
+impl PieceBlockAllocation {
     pub fn new(
         piece_id: u32,
         torrent: &V1Torrent,
@@ -46,6 +48,16 @@ impl PieceBlockTracking {
     }
 }
 
+struct PieceDownload {
+    started: Instant,
+    piece_request: PeerRequestedPiece,
+}
+
+pub struct PieceBlockTracker {
+    piece_to_blocks_not_started: HashMap<u32, PieceBlockAllocation>,
+    blocks_started: VecDeque<PieceDownload>
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -56,7 +68,7 @@ mod test {
         let torrent = torrent_fixture(vec![1; 20]);
         let peer_id: InternalPeerId = Arc::new(vec![2; 20]);
         let piece_id = 0;
-        let req = PieceBlockTracking::new(
+        let req = PieceBlockAllocation::new(
             piece_id,
             &torrent,
             vec![peer_id.clone()].into_iter().collect(),
@@ -87,7 +99,7 @@ mod test {
         let torrent = torrent_fixture(vec![1; 20]);
         let peer_id: InternalPeerId = Arc::new(vec![2; 20]);
         let piece_id = 1;
-        let req = PieceBlockTracking::new(
+        let req = PieceBlockAllocation::new(
             piece_id,
             &torrent,
             vec![peer_id.clone()].into_iter().collect(),

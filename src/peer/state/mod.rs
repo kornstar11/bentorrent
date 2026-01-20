@@ -4,7 +4,7 @@ use crate::model::{PeerRequestedPiece, V1Piece, V1Torrent};
 use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter, BitFieldWriter};
 use crate::peer::io::IoHandler;
 use crate::peer::protocol::{FlagMessages, Handshake};
-use crate::peer::state::request::PieceBlockTracking;
+use crate::peer::state::request::PieceBlockAllocation;
 use anyhow::Result;
 use bytes::BytesMut;
 use futures::StreamExt;
@@ -590,12 +590,15 @@ impl TorrentProcessor {
     ) {
         let mut locked_state = state.lock().await;
         //log::debug!("Computing peer requests {:?}", locked_state.torrent_state);
+
+        // this function forgets that pieces need to be broken into blocks, so no real block tracking is done...
+
         let torrent = locked_state.torrent.clone();
         let block_to_request_tracker = locked_state
             .torrent_state
             .peer_willing_to_upload_pieces()
             .into_iter()
-            .map(|(piece_id, peers)| (piece_id, PieceBlockTracking::new(piece_id, &torrent, peers)))
+            .map(|(piece_id, peers)| (piece_id, PieceBlockAllocation::new(piece_id, &torrent, peers)))
             .filter_map(|(p, tracker_opt)| tracker_opt.map(|t| (p, t)))
             .take(MAX_OUTSTANDING_REQUESTS)
             .collect::<HashMap<_, _>>();
