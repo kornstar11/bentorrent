@@ -48,14 +48,18 @@ impl PieceBlockAllocation {
     }
 }
 
-struct PieceDownload {
+struct BlockDownload {
     started: Instant,
     piece_request: PeerRequestedPiece,
 }
 
 pub struct PieceBlockTracker {
     piece_to_blocks_not_started: HashMap<u32, PieceBlockAllocation>,
-    blocks_started: VecDeque<PieceDownload>
+    blocks_started: VecDeque<BlockDownload>
+}
+
+impl PieceBlockTracker {
+    pub fn new()
 }
 
 #[cfg(test)]

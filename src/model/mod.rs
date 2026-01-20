@@ -18,9 +18,3 @@ pub struct PeerRequestedPiece {
     pub begin: u32,
     pub length: u32,
 }
-
-impl Into<Messages> for &PeerRequestedPiece {
-    fn into(&self) -> Messages {
-        
-    }
-}
