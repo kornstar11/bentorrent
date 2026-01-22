@@ -2,7 +2,7 @@ use std::{collections::{BTreeMap, HashMap, HashSet, VecDeque}, sync::Arc, time::
 
 use crate::{
     model::{InternalPeerId, PeerRequestedPiece, V1Torrent},
-    peer::{PIECE_BLOCK_SIZE, TorrentAllocation, state::request},
+    peer::{PIECE_BLOCK_SIZE, TorrentAllocation}
 };
 
 // within a piece this maps the blocks using the "begin" as the key
@@ -82,7 +82,7 @@ impl BlockDownload {
     }
 }
 
-#[derive(Copy, Debug, Hash, PartialEq, PartialOrd)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, PartialOrd)]
 struct PieceToBlockKey {
     piece_id: u32,
     block_begin: u32,
@@ -94,7 +94,8 @@ struct PieceToBlockMap {
 }
 
 impl PieceToBlockMap {
-    fn insert(&mut self, k: PieceToBlockKey, started: Instant, piece_request: PeerRequestedPiece) {
+    fn insert(&mut self, started: Instant, piece_request: PeerRequestedPiece) {
+        let k = PieceToBlockKey { piece_id: piece_request.index, block_begin: piece_request.begin };
         let download = BlockDownload {
             started,
             piece_request
@@ -127,7 +128,19 @@ impl PieceToBlockMap {
             }
         }
         acc
+    }
 
+    fn all_outstanding_requests(&self) -> Vec<BlockDownload> {
+        self.piece_to_blocks_started.iter().flat_map(|(_, requests)| {
+            requests.iter().map(|(_, request)| {request.clone()})
+        }).collect()
+    }
+
+    fn inprogress_requests_by_piece_id(&mut self, piece_id: u32) -> &mut OutstandingBlockRequests {
+        self
+            .piece_to_blocks_started
+            .entry(piece_id)
+            .or_insert_with(|| BTreeMap::new())
     }
     
 }
@@ -137,7 +150,8 @@ pub struct PieceBlockTracker {
     max_outstanding_requests: usize,
     request_timeout: Duration,
     // mapping of piece_id to chunk start (begin in the protocol)
-    piece_to_blocks_started: HashMap<u32, OutstandingBlockRequests>,
+    piece_to_blocks_started: PieceToBlockMap,
+    //piece_to_blocks_started: HashMap<u32, OutstandingBlockRequests>,
     pieces_completed: HashSet<u32>,
 }
 
@@ -156,30 +170,20 @@ impl PieceBlockTracker {
     }
 
     pub fn outstanding_requests_len(&self) -> usize {
-        self.all_outstanding_requests().len()
+        self.piece_to_blocks_started.all_outstanding_requests().len()
     }
 
-    fn all_outstanding_requests(&self) -> Vec<BlockDownload> {
-        self.piece_to_blocks_started.iter().flat_map(|(_, requests)| {
-            requests.iter().map(|(_, request)| {request.clone()})
-        }).collect()
-    }
-
-    fn inprogress_requests_by_piece_id(&mut self, piece_id: u32) -> &mut OutstandingBlockRequests {
-        self
-            .piece_to_blocks_started
-            .entry(piece_id)
-            .or_insert_with(|| BTreeMap::new())
-    }
     // look for requests that have started, but not finished in request_timeout
-    fn prune_stalled(&mut self) -> OutstandingBlockRequests {
-        todo!()
+    fn remove_expired(&mut self) -> Vec<PeerRequestedPiece> {
+        let now = Instant::now();
+        self.piece_to_blocks_started.remove_expired(now, self.request_timeout)
     }
 
     pub fn assign_piece(&mut self, torrent: &V1Torrent, piece_id: u32, peer_ids: HashSet<InternalPeerId>) -> Vec<PeerRequestedPiece> {
-        let inflight_requests = self.all_outstanding_requests().len();
+        let now = Instant::now();
+        let inflight_requests = self.outstanding_requests_len();
         let mut capacity = self.max_outstanding_requests - inflight_requests;
-        let outstanding_requests = self.inprogress_requests_by_piece_id(piece_id);
+        let outstanding_requests = self.piece_to_blocks_started.inprogress_requests_by_piece_id(piece_id);
         let assignable_requests_opt = PieceBlockAllocation::new(
             piece_id, 
             torrent, 
@@ -191,9 +195,7 @@ impl PieceBlockTracker {
         if let Some(alloc) = assignable_requests_opt {
             let allocated_requests = alloc.requests_to_make;
             for req in allocated_requests.iter() {
-                // update the outstanding
-                let download = BlockDownload::new(req.clone());
-                outstanding_requests.insert(req.begin, download);
+                self.piece_to_blocks_started.insert(now, req.clone());
             }
             allocated_requests
         } else {
