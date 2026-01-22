@@ -4,7 +4,7 @@ use crate::model::{PeerRequestedPiece, V1Piece, V1Torrent};
 use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter, BitFieldWriter};
 use crate::peer::io::IoHandler;
 use crate::peer::protocol::{FlagMessages, Handshake};
-use crate::peer::state::request::{PieceBlockAllocation, PieceBlockTracker};
+use crate::peer::state::request::PieceBlockTracker;
 use anyhow::Result;
 use bytes::BytesMut;
 use futures::StreamExt;
@@ -18,8 +18,6 @@ use tokio::sync::{Mutex, mpsc};
 use super::protocol::Messages;
 
 type PeerToSender = HashMap<InternalPeerId, Sender<Messages>>;
-
-const MAX_OUTSTANDING_REQUESTS: usize = 4;
 
 // Unlocking before the next async boundry is important, so this aims to make any channel send coupled with a drop.
 macro_rules! unlock_and_send {
@@ -284,18 +282,19 @@ impl TorrentState {
     //     self.pieces_finished.len() ==
     // }
 
-    pub fn peer_willing_to_upload_pieces(&mut self) -> HashMap<u32, HashSet<InternalPeerId>> {
+    ///
+    /// returns a map where the key is the piece_id, and value is the peers that HAVE that piece
+    pub fn piece_id_to_peers(&mut self) -> HashMap<u32, HashSet<InternalPeerId>> {
         let peer_we_can_download_from = self.peers_that_choke(false);
-        // CHANGEME
         self.pieces_not_started
             .iter()
-            .map(|outstanding_block| {
-                let peers_with_piece = self.block_peer_map.get_peers_with_piece(*outstanding_block);
+            .map(|outstanding_piece| {
+                let peers_with_piece = self.block_peer_map.get_peers_with_piece(*outstanding_piece);
                 let peers_with_piece_and_not_choked = peer_we_can_download_from
                     .intersection(&peers_with_piece)
                     .map(|id| Arc::clone(id))
                     .collect::<HashSet<_>>();
-                (*outstanding_block, peers_with_piece_and_not_choked)
+                (*outstanding_piece, peers_with_piece_and_not_choked)
             })
             .collect()
     }
@@ -400,12 +399,17 @@ impl TorrentProcessor {
                 },
                 _ = timeout_fut.tick() => {
                     Self::compute_unchoke(Arc::clone(&state), &mut peer_to_tx).await;
-                    let locked_state = state.lock().await;
+                    let mut locked_state = state.lock().await;
+                    let expired = locked_state.torrent_state.piece_block_tracking.remove_expired();
+                    if !expired.is_empty() { // TODO handle expired requests
+                        log::warn!("Expired requests: {:?}", expired);
+                    }
                     let pieces_completed = locked_state.torrent_state.piece_block_tracking.pieces_completed_len();
                     let percent_completed = ((pieces_completed as f64) / (locked_state.torrent.info.pieces.len() as f64)) * 100.0;
-                    log::info!("timer stats: pieces_not_started={}, pieces_started={}, pieces_finished={}, percent_finished={}",
+                    log::info!("timer stats: pieces_not_started={}, outstanding_requests={}, outstanding_pieces={} pieces_finished={}, percent_finished={}",
                         locked_state.torrent_state.pieces_not_started.len(),
                         locked_state.torrent_state.piece_block_tracking.outstanding_requests_len(),
+                        locked_state.torrent_state.piece_block_tracking.outstanding_pieces_len(),
                         pieces_completed,
                         percent_completed
                     );
@@ -599,47 +603,27 @@ impl TorrentProcessor {
         // this function forgets that pieces need to be broken into blocks, so no real block tracking is done...
 
         let torrent = locked_state.torrent.clone();
-        let block_to_request_tracker = locked_state
+        let requests = locked_state
             .torrent_state
-            .peer_willing_to_upload_pieces()
+            .piece_id_to_peers()
             .into_iter()
-            .map(|(piece_id, peers)| (piece_id, PieceBlockAllocation::new(piece_id, &torrent, peers)))
-            .filter_map(|(p, tracker_opt)| tracker_opt.map(|t| (p, t)))
-            .take(MAX_OUTSTANDING_REQUESTS)
-            .collect::<HashMap<_, _>>();
+            .flat_map(|(piece_id, peers_with_piece)|{
+                locked_state.torrent_state.piece_block_tracking.assign_piece(&torrent, piece_id, peers_with_piece)
+                    .into_iter()
+            }).collect::<Vec<_>>();
 
-        for (piece_id, tracker) in block_to_request_tracker.into_iter() {
-            log::trace!("Dispatch request for piece_id {}", piece_id);
-            let grouped = tracker
-                .requests_to_make
-                .iter()
-                .fold(HashMap::new(), |mut acc, e| {
-                    let entry = acc
-                        .entry((e.peer_id.clone(), e.index))
-                        .or_insert_with(|| vec![]);
-                    entry.push(e);
-                    acc
-                });
-            for ((peer_id, piece_id), reqs) in grouped {
-                log::trace!("Attempting to send request for piece_id {}", piece_id);
-                if let Some(tx) = peer_to_tx.get(&peer_id) {
-                    if let Ok(perm_it) = tx.try_reserve_many(reqs.len()) {
-                        for (perm, req) in perm_it.zip(reqs) {
-                            let req_msg = Messages::Request {
-                                index: req.index,
-                                begin: req.begin,
-                                length: req.length,
-                            };
-                            perm.send(req_msg);
-                        }
-                        locked_state.torrent_state.set_piece_started(piece_id);
-                    } else {
-                        log::debug!(
-                            "Sending requests would fail... skipping.... piece_id={}",
-                            piece_id
-                        );
-                    }
+        // PieceBlockAllocation
+        for request in requests.into_iter() {
+            log::trace!("Dispatch request for piece_id {}", request.index);
+            if let Some(tx) = peer_to_tx.get(&request.peer_id) {
+                if let Ok(_) = tx.send(Messages::Request { index: request.index, begin: request.begin, length: request.length }).await {
+                    let _ = locked_state.torrent_state.pieces_not_started.remove(&request.index);
+                    continue;
                 }
+            }
+            log::warn!("Unable to dispatch {:?}", request);
+            if !locked_state.torrent_state.piece_block_tracking.remove_request(request) {
+                log::warn!("Request not found for removal")
             }
         }
     }
@@ -653,7 +637,7 @@ impl TorrentProcessor {
         let state = state.lock().await;
         let mut bitfield = BitFieldWriter::new(BytesMut::new());
         bitfield.put_bit_set(
-            &state.torrent_state.pieces_finished,
+            state.torrent_state.piece_block_tracking.get_pieces_completed(),
             state.torrent.info.pieces.len(),
         );
         let bitfield = Messages::BitField {
@@ -813,7 +797,7 @@ impl TorrentProcessor {
                     let mut state = state.lock().await;
                     if finished {
                         log::trace!("Piece done! piece={}", index);
-                        state.torrent_state.set_piece_finished(index);
+                        state.torrent_state.piece_block_tracking.set_piece_finished(index);
 
                         unlock_and_send!(wake_tx, state, {
                             InternalStateMessage::PieceComplete { piece_id: index }

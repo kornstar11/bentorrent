@@ -67,19 +67,10 @@ impl PieceBlockAllocation {
         }
     }
 }
+
 #[derive(Clone, Debug)]
 struct BlockDownload {
-    started: Instant,
     piece_request: PeerRequestedPiece,
-}
-
-impl BlockDownload {
-    fn new(piece_request: PeerRequestedPiece) -> Self {
-        Self {
-            started: Instant::now(),
-            piece_request,
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, PartialOrd)]
@@ -97,7 +88,6 @@ impl PieceToBlockMap {
     fn insert(&mut self, started: Instant, piece_request: PeerRequestedPiece) {
         let k = PieceToBlockKey { piece_id: piece_request.index, block_begin: piece_request.begin };
         let download = BlockDownload {
-            started,
             piece_request
         };
         // push to expirations queue
@@ -106,7 +96,15 @@ impl PieceToBlockMap {
             .piece_to_blocks_started
             .entry(k.piece_id)
             .or_insert_with(|| BTreeMap::default());
-        block_map.insert(k.block_begin, download);
+        let _ = block_map.insert(k.block_begin, download);
+    }
+
+    fn remove_request(&mut self, piece_id: u32, begin: u32) -> bool {
+        self.inprogress_requests_by_piece_id(piece_id).remove(&begin).is_some()
+    }
+
+    fn remove_piece(&mut self, piece_id: u32) -> bool {
+        self.piece_to_blocks_started.remove(&piece_id).is_some()
     }
 
     fn remove_expired(&mut self, time: Instant, ttl: Duration) -> Vec<PeerRequestedPiece> {
@@ -134,6 +132,10 @@ impl PieceToBlockMap {
         self.piece_to_blocks_started.iter().flat_map(|(_, requests)| {
             requests.iter().map(|(_, request)| {request.clone()})
         }).collect()
+    }
+
+    fn outstanding_pieces_len(&self) -> usize {
+        self.piece_to_blocks_started.iter().filter(|(_, reqs)| !reqs.is_empty()).count()
     }
 
     fn inprogress_requests_by_piece_id(&mut self, piece_id: u32) -> &mut OutstandingBlockRequests {
@@ -165,6 +167,10 @@ impl PieceBlockTracker {
         }
     }
 
+    pub fn get_pieces_completed(&self) -> &HashSet<u32> {
+        &self.pieces_completed
+    }
+
     pub fn pieces_completed_len(&self) -> usize {
         self.pieces_completed.len()
     }
@@ -173,12 +179,29 @@ impl PieceBlockTracker {
         self.piece_to_blocks_started.all_outstanding_requests().len()
     }
 
+    pub fn outstanding_pieces_len(&self) -> usize {
+        self.piece_to_blocks_started.outstanding_pieces_len()
+    }
+
+    pub fn set_piece_finished(&mut self, piece_id: u32) {
+        let _ = self.piece_to_blocks_started.remove_piece(piece_id);
+        let _ = self.pieces_completed.insert(piece_id);
+    }
+
     // look for requests that have started, but not finished in request_timeout
-    fn remove_expired(&mut self) -> Vec<PeerRequestedPiece> {
+    pub fn remove_expired(&mut self) -> Vec<PeerRequestedPiece> {
         let now = Instant::now();
         self.piece_to_blocks_started.remove_expired(now, self.request_timeout)
     }
 
+    // TODO: function to remove requests that may have been dropped, due to conntection drop out or something else.
+    pub fn remove_request(&mut self, req: PeerRequestedPiece) -> bool {
+        self.piece_to_blocks_started.remove_request(req.index, req.begin)
+    }
+
+    ///
+    /// Function to generate the requests needed for a piece to be downloaded.
+    /// Assumes that requests will be sent, and adds them for download tracking.
     pub fn assign_piece(&mut self, torrent: &V1Torrent, piece_id: u32, peer_ids: HashSet<InternalPeerId>) -> Vec<PeerRequestedPiece> {
         let now = Instant::now();
         let inflight_requests = self.outstanding_requests_len();
@@ -195,6 +218,7 @@ impl PieceBlockTracker {
         if let Some(alloc) = assignable_requests_opt {
             let allocated_requests = alloc.requests_to_make;
             for req in allocated_requests.iter() {
+                log::trace!("Allocated REQ: {} :: {:?}", piece_id, allocated_requests);
                 self.piece_to_blocks_started.insert(now, req.clone());
             }
             allocated_requests
