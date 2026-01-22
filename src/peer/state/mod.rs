@@ -4,7 +4,7 @@ use crate::model::{PeerRequestedPiece, V1Piece, V1Torrent};
 use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter, BitFieldWriter};
 use crate::peer::io::IoHandler;
 use crate::peer::protocol::{FlagMessages, Handshake};
-use crate::peer::state::request::PieceBlockAllocation;
+use crate::peer::state::request::{PieceBlockAllocation, PieceBlockTracker};
 use anyhow::Result;
 use bytes::BytesMut;
 use futures::StreamExt;
@@ -139,14 +139,15 @@ struct InternalPeerState {
 
 #[derive(Debug, Default)]
 struct TorrentState {
-    //peers: HashSet<InternalPeerId>,
+    pieces_not_started: HashSet<u32>,
+    piece_block_tracking: PieceBlockTracker,
+    // Defaults below
     peers_interested: HashSet<InternalPeerId>, // they are interested in us
     peers_not_choking: HashSet<InternalPeerId>, // they are choking us
     block_peer_map: PeerPieceMap,
     /// piece tracking
-    pieces_not_started: HashSet<u32>,
-    pieces_started: HashSet<u32>,
-    pieces_finished: HashSet<u32>,
+    // pieces_started: HashSet<u32>,
+    // pieces_finished: HashSet<u32>,
     //
     peers: HashMap<InternalPeerId, InternalPeerState>,
     outstanding_peer_requests: VecDeque<PeerRequestedPiece>,
@@ -155,8 +156,10 @@ struct TorrentState {
 impl TorrentState {
     pub fn new(pieces: &Vec<V1Piece>) -> Self {
         let pieces_not_started: HashSet<_> = (0..pieces.len()).map(|piece| piece as u32).collect();
+        let piece_block_tracking = PieceBlockTracker::new();
         Self {
             pieces_not_started,
+            piece_block_tracking,
             ..Default::default()
         }
     }
@@ -267,15 +270,15 @@ impl TorrentState {
         self.peers.get_mut(peer_id)
     }
 
-    pub fn set_piece_started(&mut self, piece_id: u32) {
-        let _ = self.pieces_not_started.remove(&piece_id);
-        let _ = self.pieces_started.insert(piece_id);
-    }
+    // pub fn set_piece_started(&mut self, piece_id: u32) {
+    //     let _ = self.pieces_not_started.remove(&piece_id);
+    //     let _ = self.pieces_started.insert(piece_id);
+    // }
 
-    pub fn set_piece_finished(&mut self, piece_id: u32) {
-        let _ = self.pieces_started.remove(&piece_id);
-        let _ = self.pieces_finished.insert(piece_id);
-    }
+    // pub fn set_piece_finished(&mut self, piece_id: u32) {
+    //     let _ = self.pieces_started.remove(&piece_id);
+    //     let _ = self.pieces_finished.insert(piece_id);
+    // }
 
     // pub fn download_done(&self) -> bool {
     //     self.pieces_finished.len() ==
@@ -283,6 +286,7 @@ impl TorrentState {
 
     pub fn peer_willing_to_upload_pieces(&mut self) -> HashMap<u32, HashSet<InternalPeerId>> {
         let peer_we_can_download_from = self.peers_that_choke(false);
+        // CHANGEME
         self.pieces_not_started
             .iter()
             .map(|outstanding_block| {
@@ -397,11 +401,12 @@ impl TorrentProcessor {
                 _ = timeout_fut.tick() => {
                     Self::compute_unchoke(Arc::clone(&state), &mut peer_to_tx).await;
                     let locked_state = state.lock().await;
-                    let percent_completed = ((locked_state.torrent_state.pieces_finished.len() as f64) / (locked_state.torrent.info.pieces.len() as f64)) * 100.0;
+                    let pieces_completed = locked_state.torrent_state.piece_block_tracking.pieces_completed_len();
+                    let percent_completed = ((pieces_completed as f64) / (locked_state.torrent.info.pieces.len() as f64)) * 100.0;
                     log::info!("timer stats: pieces_not_started={}, pieces_started={}, pieces_finished={}, percent_finished={}",
                         locked_state.torrent_state.pieces_not_started.len(),
-                        locked_state.torrent_state.pieces_started.len(),
-                        locked_state.torrent_state.pieces_finished.len(),
+                        locked_state.torrent_state.piece_block_tracking.outstanding_requests_len(),
+                        pieces_completed,
                         percent_completed
                     );
                 }

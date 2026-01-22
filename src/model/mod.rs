@@ -11,7 +11,7 @@ pub use tracker::{TrackerPeer, TrackerResponse};
 pub type PeerId = Vec<u8>;
 pub type InternalPeerId = Arc<PeerId>;
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PeerRequestedPiece {
     pub peer_id: InternalPeerId,
     pub index: u32,
