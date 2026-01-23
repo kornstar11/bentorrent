@@ -183,6 +183,11 @@ impl PieceBlockTracker {
         self.piece_to_blocks_started.outstanding_pieces_len()
     }
 
+    pub fn set_request_finished(&mut self, piece_id: u32, begin: u32) {
+        let _ = self.piece_to_blocks_started.remove_request(piece_id, begin);
+
+    }
+
     pub fn set_piece_finished(&mut self, piece_id: u32) {
         let _ = self.piece_to_blocks_started.remove_piece(piece_id);
         let _ = self.pieces_completed.insert(piece_id);
@@ -204,6 +209,8 @@ impl PieceBlockTracker {
     /// Assumes that requests will be sent, and adds them for download tracking.
     pub fn assign_piece(&mut self, torrent: &V1Torrent, piece_id: u32, peer_ids: HashSet<InternalPeerId>) -> Vec<PeerRequestedPiece> {
         let now = Instant::now();
+        // currently this method is a bit flawed, we may need to resume piece tracking externally since the peer lists may change over time
+        // as it stands we dont plan any initial requests after this method is called, and because of this we become stalled.
         let inflight_requests = self.outstanding_requests_len();
         let mut capacity = self.max_outstanding_requests - inflight_requests;
         let outstanding_requests = self.piece_to_blocks_started.inprogress_requests_by_piece_id(piece_id);
