@@ -137,26 +137,19 @@ struct InternalPeerState {
 
 #[derive(Debug, Default)]
 struct TorrentState {
-    pieces_not_started: HashSet<u32>,
     piece_block_tracking: PieceBlockTracker,
     // Defaults below
     peers_interested: HashSet<InternalPeerId>, // they are interested in us
     peers_not_choking: HashSet<InternalPeerId>, // they are choking us
     block_peer_map: PeerPieceMap,
-    /// piece tracking
-    // pieces_started: HashSet<u32>,
-    // pieces_finished: HashSet<u32>,
-    //
     peers: HashMap<InternalPeerId, InternalPeerState>,
     outstanding_peer_requests: VecDeque<PeerRequestedPiece>,
 }
 
 impl TorrentState {
     pub fn new(pieces: &Vec<V1Piece>) -> Self {
-        let pieces_not_started: HashSet<_> = (0..pieces.len()).map(|piece| piece as u32).collect();
-        let piece_block_tracking = PieceBlockTracker::new();
+        let piece_block_tracking = PieceBlockTracker::new(pieces);
         Self {
-            pieces_not_started,
             piece_block_tracking,
             ..Default::default()
         }
@@ -234,14 +227,14 @@ impl TorrentState {
         self.add_peer_id(Arc::clone(&peer_id));
         let prev_interest = !self
             .block_peer_map
-            .peer_interest(&peer_id, &self.pieces_not_started)
+            .peer_interest(&peer_id, self.piece_block_tracking.pieces_not_started())
             .is_empty();
         for piece in pieces {
             self.block_peer_map.add_piece(Arc::clone(&peer_id), piece);
         }
         let interest = !self
             .block_peer_map
-            .peer_interest(&peer_id, &self.pieces_not_started)
+            .peer_interest(&peer_id, self.piece_block_tracking.pieces_not_started())
             .is_empty();
         if prev_interest != interest {
             (*self
@@ -268,33 +261,19 @@ impl TorrentState {
         self.peers.get_mut(peer_id)
     }
 
-    // pub fn set_piece_started(&mut self, piece_id: u32) {
-    //     let _ = self.pieces_not_started.remove(&piece_id);
-    //     let _ = self.pieces_started.insert(piece_id);
-    // }
-
-    // pub fn set_piece_finished(&mut self, piece_id: u32) {
-    //     let _ = self.pieces_started.remove(&piece_id);
-    //     let _ = self.pieces_finished.insert(piece_id);
-    // }
-
-    // pub fn download_done(&self) -> bool {
-    //     self.pieces_finished.len() ==
-    // }
-
     ///
     /// returns a map where the key is the piece_id, and value is the peers that HAVE that piece
     pub fn piece_id_to_peers(&mut self) -> HashMap<u32, HashSet<InternalPeerId>> {
         let peer_we_can_download_from = self.peers_that_choke(false);
-        self.pieces_not_started
-            .iter()
+        self.piece_block_tracking
+            .get_incomplete_pieces()
             .map(|outstanding_piece| {
-                let peers_with_piece = self.block_peer_map.get_peers_with_piece(*outstanding_piece);
+                let peers_with_piece = self.block_peer_map.get_peers_with_piece(outstanding_piece);
                 let peers_with_piece_and_not_choked = peer_we_can_download_from
                     .intersection(&peers_with_piece)
                     .map(|id| Arc::clone(id))
                     .collect::<HashSet<_>>();
-                (*outstanding_piece, peers_with_piece_and_not_choked)
+                (outstanding_piece, peers_with_piece_and_not_choked)
             })
             .collect()
     }
@@ -407,7 +386,7 @@ impl TorrentProcessor {
                     let pieces_completed = locked_state.torrent_state.piece_block_tracking.pieces_completed_len();
                     let percent_completed = ((pieces_completed as f64) / (locked_state.torrent.info.pieces.len() as f64)) * 100.0;
                     log::info!("timer stats: pieces_not_started={}, outstanding_requests={}, outstanding_pieces={} pieces_finished={}, percent_finished={}",
-                        locked_state.torrent_state.pieces_not_started.len(),
+                        locked_state.torrent_state.piece_block_tracking.pieces_not_started().len(),
                         locked_state.torrent_state.piece_block_tracking.outstanding_requests_len(),
                         locked_state.torrent_state.piece_block_tracking.outstanding_pieces_len(),
                         pieces_completed,
@@ -617,7 +596,6 @@ impl TorrentProcessor {
             log::trace!("Dispatch request for piece_id {}", request.index);
             if let Some(tx) = peer_to_tx.get(&request.peer_id) {
                 if let Ok(_) = tx.send(Messages::Request { index: request.index, begin: request.begin, length: request.length }).await {
-                    let _ = locked_state.torrent_state.pieces_not_started.remove(&request.index);
                     continue;
                 }
             }
