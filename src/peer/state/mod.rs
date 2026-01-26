@@ -148,7 +148,7 @@ struct TorrentState {
 
 impl TorrentState {
     pub fn new(pieces: &Vec<V1Piece>) -> Self {
-        let piece_block_tracking = PieceBlockTracker::new(pieces);
+        let piece_block_tracking = PieceBlockTracker::new(4, pieces);
         Self {
             piece_block_tracking,
             ..Default::default()

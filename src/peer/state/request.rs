@@ -112,6 +112,7 @@ impl PieceToBlockMap {
 
     fn remove_expired(&mut self, time: Instant, ttl: Duration) -> Vec<PeerRequestedPiece> {
         let mut acc = vec![];
+        log::debug!("checking expirations on: {}", self.expirations.len());
         while let Some(ele @(entry_time, k)) = self.expirations.pop_front() {
             let lived_time = time
                 .checked_duration_since(entry_time)
@@ -164,10 +165,10 @@ pub struct PieceBlockTracker {
 }
 
 impl PieceBlockTracker {
-    pub fn new(pieces: &Vec<V1Piece>) -> Self {
+    pub fn new(max_outstanding_requests: usize, pieces: &Vec<V1Piece>) -> Self {
         let pieces_not_started: HashSet<_> = (0..pieces.len()).map(|piece| piece as u32).collect();
         Self {
-            max_outstanding_requests: 4,
+            max_outstanding_requests,
             pieces_not_started,
             request_timeout: Duration::from_secs(10),
             piece_to_blocks_started: Default::default(),
@@ -277,12 +278,38 @@ impl PieceBlockTracker {
 #[cfg(test)]
 mod test {
     use super::*;
-        use crate::peer::test::torrent_fixture;
+    use crate::peer::test::torrent_fixture;
 
     mod piece_block_tracker_tests {
         use super::*;
+
         #[test]
-        fn correctly_assigns_pieces_when_assigned() {
+        fn correctly_assigns_pieces_when_assigned_not_hitting_threshold() {
+            let torrent = torrent_fixture(vec![1; 20]);
+            let peers = vec![Arc::new(vec![0; 10])].into_iter().collect::<HashSet<_>>();
+
+
+            let mut pbt = PieceBlockTracker::new(2, &torrent.info.pieces);
+
+            let availiable_piece_to_peers = torrent.info.pieces
+                .iter()
+                .enumerate()
+                .map(|(idx, _)|{
+                    (idx, peers.clone())
+                }).fold(HashMap::new(), |mut acc, ele| {
+                    let _ = acc.insert(ele.0 as u32, ele.1);
+                    acc
+                });
+                let assignments = pbt.generate_assignments(&torrent, &availiable_piece_to_peers);
+                assert!(!assignments.is_empty());
+                // Expect max allowed requests to be dispatched.
+                assert_eq!(pbt.outstanding_requests_len(), 2);
+                assert_eq!(pbt.outstanding_pieces_len(), 1);
+                assert_eq!(pbt.pieces_not_started.len(), 1)
+
+        }
+        #[test]
+        fn correctly_assigns_pieces_when_assigned_hitting_threshold() {
         }
 
     }
