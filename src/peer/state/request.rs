@@ -112,9 +112,9 @@ impl PieceToBlockMap {
 
     fn remove_expired(&mut self, time: Instant, ttl: Duration) -> Vec<PeerRequestedPiece> {
         let mut acc = vec![];
-        while let Some((entry_time, k)) = self.expirations.pop_front() {
+        while let Some((entry_time, k)) = self.expirations.get(0) {
             let lived_time = time
-                .checked_duration_since(entry_time)
+                .checked_duration_since(*entry_time)
                 .unwrap_or(Duration::ZERO);
             if lived_time >= ttl {
                 if let Some(expired) = self.piece_to_blocks_started
@@ -122,6 +122,7 @@ impl PieceToBlockMap {
                     .and_then(|begin_map| {
                         begin_map.remove(&k.block_begin)
                 }) {
+                    let _ = self.expirations.pop_front();
                     acc.push(expired.piece_request);
                 }
             } else {
