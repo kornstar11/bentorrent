@@ -19,11 +19,11 @@ impl PieceBlockAllocation {
     fn new(
         piece_id: u32,
         torrent: &V1Torrent,
-        peer_ids: HashSet<InternalPeerId>,
+        peer_ids: &HashSet<InternalPeerId>,
         outstanding_requests: Option<&OutstandingBlockRequests>,
         request_capacity: &mut usize,
     ) -> Option<Self> {
-        let empty = BTreeMap::new();
+        let empty_outstanding_requests = BTreeMap::new(); // TODO gross, find another way
         if let Some(peer_id) = peer_ids.iter().next() {
             let mut requests_to_make = vec![];
             let allocation = TorrentAllocation::allocate_torrent(torrent);
@@ -35,7 +35,7 @@ impl PieceBlockAllocation {
                 allocation.max_piece_size
             };
             for begin in (0..piece_size).step_by(PIECE_BLOCK_SIZE) {
-                let outstanding_requests = outstanding_requests.unwrap_or_else(|| &empty);
+                let outstanding_requests = outstanding_requests.unwrap_or_else(|| &empty_outstanding_requests);
                 let already_requested = outstanding_requests
                     .get(&(begin as u32))
                     .and_then(|req| { // this may not be needed
@@ -228,7 +228,7 @@ impl PieceBlockTracker {
     ///
     /// Function to generate the requests needed for a piece to be downloaded.
     /// Assumes that requests will be sent, and adds them for download tracking.
-    pub fn assign_piece(&mut self, torrent: &V1Torrent, piece_id: u32, peer_ids: HashSet<InternalPeerId>) -> Vec<PeerRequestedPiece> {
+    fn assign_piece(&mut self, torrent: &V1Torrent, piece_id: u32, peer_ids: &HashSet<InternalPeerId>) -> Vec<PeerRequestedPiece> {
         let now = Instant::now();
         // currently this method is a bit flawed, we may need to resume piece tracking externally since the peer lists may change over time
         // as it stands we dont plan any initial requests after this method is called, and because of this we become stalled.
@@ -250,16 +250,25 @@ impl PieceBlockTracker {
             let allocated_requests = alloc.requests_to_make;
             if !allocated_requests.is_empty() {
                 // starting piece
+                log::info!("Allocateding REQs: {}", piece_id);
                 let _ = self.pieces_not_started.remove(&piece_id);
             }
             for req in allocated_requests.iter() {
-                log::trace!("Allocated REQ: {} :: {:?}", piece_id, allocated_requests);
+                log::info!("Allocated REQ: {} :: {:?}", piece_id, allocated_requests);
                 self.piece_to_blocks_started.insert(now, req.clone());
             }
             allocated_requests
         } else {
             vec![]
         }
+    }
+
+    pub fn generate_assignments(&mut self, torrent: &V1Torrent, availiable_piece_to_peers: &HashMap<u32, HashSet<InternalPeerId>>) -> Vec<PeerRequestedPiece> {
+        availiable_piece_to_peers.iter().flat_map(|(piece_id, peers_with_piece)|{
+            self.assign_piece(&torrent, *piece_id, peers_with_piece)
+                .into_iter()
+        }).collect::<Vec<_>>()
+
     }
 }
 

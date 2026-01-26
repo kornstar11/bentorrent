@@ -582,14 +582,15 @@ impl TorrentProcessor {
         // this function forgets that pieces need to be broken into blocks, so no real block tracking is done...
 
         let torrent = locked_state.torrent.clone();
+
+        let peer_to_pieces_availaible = locked_state
+            .torrent_state
+            .piece_id_to_peers();
+
         let requests = locked_state
             .torrent_state
-            .piece_id_to_peers()
-            .into_iter()
-            .flat_map(|(piece_id, peers_with_piece)|{
-                locked_state.torrent_state.piece_block_tracking.assign_piece(&torrent, piece_id, peers_with_piece)
-                    .into_iter()
-            }).collect::<Vec<_>>();
+            .piece_block_tracking
+            .generate_assignments(&torrent, &peer_to_pieces_availaible);
 
         // PieceBlockAllocation
         for request in requests.into_iter() {
