@@ -20,9 +20,10 @@ impl PieceBlockAllocation {
         piece_id: u32,
         torrent: &V1Torrent,
         peer_ids: HashSet<InternalPeerId>,
-        outstanding_requests: &OutstandingBlockRequests,
+        outstanding_requests: Option<&OutstandingBlockRequests>,
         request_capacity: &mut usize,
     ) -> Option<Self> {
+        let empty = BTreeMap::new();
         if let Some(peer_id) = peer_ids.iter().next() {
             let mut requests_to_make = vec![];
             let allocation = TorrentAllocation::allocate_torrent(torrent);
@@ -34,6 +35,7 @@ impl PieceBlockAllocation {
                 allocation.max_piece_size
             };
             for begin in (0..piece_size).step_by(PIECE_BLOCK_SIZE) {
+                let outstanding_requests = outstanding_requests.unwrap_or_else(|| &empty);
                 let already_requested = outstanding_requests
                     .get(&(begin as u32))
                     .and_then(|req| { // this may not be needed
@@ -100,7 +102,8 @@ impl PieceToBlockMap {
     }
 
     fn remove_request(&mut self, piece_id: u32, begin: u32) -> bool {
-        self.inprogress_requests_by_piece_id(piece_id).map(|reqs| reqs.remove(&begin)).is_some()
+        self.inprogress_requests_by_piece_id(piece_id)
+            .map(|reqs| reqs.remove(&begin)).is_some()
     }
 
     fn remove_piece(&mut self, piece_id: u32) -> bool {
@@ -135,7 +138,7 @@ impl PieceToBlockMap {
     }
 
     fn outstanding_pieces(&self) -> impl Iterator<Item = u32> {
-        self.piece_to_blocks_started.iter().filter(|(_, reqs)| !reqs.is_empty()).map(|(k, _)| {
+        self.piece_to_blocks_started.iter().map(|(k, _)| {
             *k
         })
     }
@@ -231,13 +234,15 @@ impl PieceBlockTracker {
         // as it stands we dont plan any initial requests after this method is called, and because of this we become stalled.
         let inflight_requests = self.outstanding_requests_len();
         let mut capacity = self.max_outstanding_requests - inflight_requests;
-        let outstanding_requests = self.piece_to_blocks_started.inprogress_requests_by_piece_id(piece_id);
+        let outstanding_requests = self
+            .piece_to_blocks_started
+            .inprogress_requests_by_piece_id(piece_id);
 
         let assignable_requests_opt = PieceBlockAllocation::new(
             piece_id, 
             torrent, 
             peer_ids, 
-            outstanding_requests,
+            outstanding_requests.as_deref(),
             &mut capacity,
         );
 
