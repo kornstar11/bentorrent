@@ -261,8 +261,8 @@ impl TorrentState {
         self.peers.get_mut(peer_id)
     }
 
-    ///
-    /// returns a map where the key is the piece_id, and value is the peers that HAVE that piece
+    // ///
+    // /// returns a map where the key is the piece_id, and value is the peers that HAVE that piece
     pub fn piece_id_to_peers(&mut self) -> HashMap<u32, HashSet<InternalPeerId>> {
         let peer_we_can_download_from = self.peers_that_choke(false);
         self.piece_block_tracking

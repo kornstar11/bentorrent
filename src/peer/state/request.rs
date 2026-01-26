@@ -112,9 +112,9 @@ impl PieceToBlockMap {
 
     fn remove_expired(&mut self, time: Instant, ttl: Duration) -> Vec<PeerRequestedPiece> {
         let mut acc = vec![];
-        while let Some((entry_time, k)) = self.expirations.get(0) {
+        while let Some(ele @(entry_time, k)) = self.expirations.pop_front() {
             let lived_time = time
-                .checked_duration_since(*entry_time)
+                .checked_duration_since(entry_time)
                 .unwrap_or(Duration::ZERO);
             if lived_time >= ttl {
                 if let Some(expired) = self.piece_to_blocks_started
@@ -122,10 +122,10 @@ impl PieceToBlockMap {
                     .and_then(|begin_map| {
                         begin_map.remove(&k.block_begin)
                 }) {
-                    let _ = self.expirations.pop_front();
                     acc.push(expired.piece_request);
                 }
             } else {
+                self.expirations.push_front(ele); // need to push it back
                 break;
             }
         }
@@ -274,70 +274,87 @@ impl PieceBlockTracker {
     }
 }
 
-// #[cfg(test)]
-// mod test {
-//     use super::*;
-//     use crate::peer::test::torrent_fixture;
+#[cfg(test)]
+mod test {
+    use super::*;
+        use crate::peer::test::torrent_fixture;
 
-//     #[test]
-//     fn create_correct_request_first_piece() {
-//         let torrent = torrent_fixture(vec![1; 20]);
-//         let peer_id: InternalPeerId = Arc::new(vec![2; 20]);
-//         let piece_id = 0;
-//         let req = PieceBlockAllocation::new(
-//             piece_id,
-//             &torrent,
-//             vec![peer_id.clone()].into_iter().collect(),
-//         )
-//         .unwrap();
-//         assert_eq!(
-//             req.requests_to_make[0],
-//             PeerRequestedPiece {
-//                 peer_id: Arc::clone(&peer_id),
-//                 index: piece_id,
-//                 begin: 0,
-//                 length: PIECE_BLOCK_SIZE as _
-//             }
-//         );
-//         assert_eq!(
-//             req.requests_to_make.last().unwrap(),
-//             &PeerRequestedPiece {
-//                 peer_id,
-//                 index: piece_id,
-//                 begin: 5111808,
-//                 length: 8192
-//             }
-//         );
-//     }
+    mod piece_block_tracker_tests {
+        use super::*;
+        #[test]
+        fn correctly_assigns_pieces_when_assigned() {
+        }
 
-//     #[test]
-//     fn create_correct_request_last_piece() {
-//         let torrent = torrent_fixture(vec![1; 20]);
-//         let peer_id: InternalPeerId = Arc::new(vec![2; 20]);
-//         let piece_id = 1;
-//         let req = PieceBlockAllocation::new(
-//             piece_id,
-//             &torrent,
-//             vec![peer_id.clone()].into_iter().collect(),
-//         )
-//         .unwrap();
-//         assert_eq!(
-//             req.requests_to_make[0],
-//             PeerRequestedPiece {
-//                 peer_id: Arc::clone(&peer_id),
-//                 index: piece_id,
-//                 begin: 0,
-//                 length: PIECE_BLOCK_SIZE as _
-//             }
-//         );
-//         assert_eq!(
-//             req.requests_to_make.last().unwrap(),
-//             &PeerRequestedPiece {
-//                 peer_id,
-//                 index: piece_id,
-//                 begin: 5111808,
-//                 length: 8192
-//             }
-//         );
-//     }
-// }
+    }
+
+    mod piece_block_alloc_tests {
+        use super::*;
+        #[test]
+        fn create_correct_request_first_piece() {
+            let mut request_capacity = 1024;
+            let torrent = torrent_fixture(vec![1; 20]);
+            let peer_id: InternalPeerId = Arc::new(vec![2; 20]);
+            let piece_id = 0;
+            let req = PieceBlockAllocation::new(
+                piece_id,
+                &torrent,
+                &vec![peer_id.clone()].into_iter().collect(),
+                None,
+                &mut request_capacity,
+            )
+            .unwrap();
+            assert_eq!(
+                req.requests_to_make[0],
+                PeerRequestedPiece {
+                    peer_id: Arc::clone(&peer_id),
+                    index: piece_id,
+                    begin: 0,
+                    length: PIECE_BLOCK_SIZE as _
+                }
+            );
+            assert_eq!(
+                req.requests_to_make.last().unwrap(),
+                &PeerRequestedPiece {
+                    peer_id,
+                    index: piece_id,
+                    begin: 5111808,
+                    length: 8192
+                }
+            );
+        }
+
+        #[test]
+        fn create_correct_request_last_piece() {
+            let mut request_capacity = 1024;
+            let torrent = torrent_fixture(vec![1; 20]);
+            let peer_id: InternalPeerId = Arc::new(vec![2; 20]);
+            let piece_id = 1;
+            let req = PieceBlockAllocation::new(
+                piece_id,
+                &torrent,
+                &vec![peer_id.clone()].into_iter().collect(),
+                None,
+                &mut request_capacity,
+            )
+            .unwrap();
+            assert_eq!(
+                req.requests_to_make[0],
+                PeerRequestedPiece {
+                    peer_id: Arc::clone(&peer_id),
+                    index: piece_id,
+                    begin: 0,
+                    length: PIECE_BLOCK_SIZE as _
+                }
+            );
+            assert_eq!(
+                req.requests_to_make.last().unwrap(),
+                &PeerRequestedPiece {
+                    peer_id,
+                    index: piece_id,
+                    begin: 5111808,
+                    length: 8192
+                }
+            );
+        }
+    }
+}
