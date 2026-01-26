@@ -174,15 +174,16 @@ impl PieceBlockTracker {
         }
     }
 
-    /// Iterator of unstarted or pieces that are started, but not completed.
+    /// Iterator of unstarted or pieces that are started, but not completed. Prioritize started pieces
     pub fn get_incomplete_pieces(&self) -> impl Iterator<Item = u32> {
-        let inprogress_pieces = self.piece_to_blocks_started.outstanding_pieces();
-        let incomplete_pieces = self
+        let not_started_pieces = self
             .pieces_not_started
             .iter()
-            .map(|id| *id)
-            .chain(inprogress_pieces);
-        incomplete_pieces
+            .map(|id| *id);
+        self
+            .piece_to_blocks_started
+            .outstanding_pieces()
+            .chain(not_started_pieces)
     }
 
     pub fn get_pieces_completed(&self) -> &HashSet<u32> {
