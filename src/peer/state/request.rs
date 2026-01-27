@@ -208,6 +208,11 @@ impl PieceBlockTracker {
         self.piece_to_blocks_started.outstanding_pieces().count()
     }
 
+    // TODO: function to remove requests that may have been dropped, due to conntection drop out or something else.
+    pub fn remove_request(&mut self, req: PeerRequestedPiece) -> bool {
+        self.piece_to_blocks_started.remove_request(req.index, req.begin)
+    }
+
     pub fn set_request_finished(&mut self, piece_id: u32, begin: u32) {
         let _ = self.piece_to_blocks_started.remove_request(piece_id, begin);
     }
@@ -223,10 +228,7 @@ impl PieceBlockTracker {
         self.piece_to_blocks_started.remove_expired(now, self.request_timeout)
     }
 
-    // TODO: function to remove requests that may have been dropped, due to conntection drop out or something else.
-    pub fn remove_request(&mut self, req: PeerRequestedPiece) -> bool {
-        self.piece_to_blocks_started.remove_request(req.index, req.begin)
-    }
+
 
     ///
     /// Function to generate the requests needed for a piece to be downloaded.
@@ -253,11 +255,11 @@ impl PieceBlockTracker {
             let allocated_requests = alloc.requests_to_make;
             if !allocated_requests.is_empty() {
                 // starting piece
-                log::info!("Allocateding REQs: {}", piece_id);
+                log::trace!("Allocateding REQs: {}", piece_id);
                 let _ = self.pieces_not_started.remove(&piece_id);
             }
             for req in allocated_requests.iter() {
-                log::info!("Allocated REQ: {} :: {:?}", piece_id, allocated_requests);
+                log::trace!("Allocated REQ: {} :: {:?}", piece_id, allocated_requests);
                 self.piece_to_blocks_started.insert(now, req.clone());
             }
             allocated_requests
@@ -278,20 +280,14 @@ impl PieceBlockTracker {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::peer::test::torrent_fixture;
+    use crate::peer::test::{torrent_fixture, torrent_fixture_impl};
 
     mod piece_block_tracker_tests {
         use super::*;
 
-        #[test]
-        fn correctly_assigns_pieces_when_assigned_not_hitting_threshold() {
-            let torrent = torrent_fixture(vec![1; 20]);
+        fn gen_availiable_piece_to_peers(torrent: &V1Torrent) -> HashMap<u32, HashSet<InternalPeerId>> {
             let peers = vec![Arc::new(vec![0; 10])].into_iter().collect::<HashSet<_>>();
-
-
-            let mut pbt = PieceBlockTracker::new(2, &torrent.info.pieces);
-
-            let availiable_piece_to_peers = torrent.info.pieces
+            torrent.info.pieces
                 .iter()
                 .enumerate()
                 .map(|(idx, _)|{
@@ -299,17 +295,54 @@ mod test {
                 }).fold(HashMap::new(), |mut acc, ele| {
                     let _ = acc.insert(ele.0 as u32, ele.1);
                     acc
-                });
-                let assignments = pbt.generate_assignments(&torrent, &availiable_piece_to_peers);
-                assert!(!assignments.is_empty());
-                // Expect max allowed requests to be dispatched.
-                assert_eq!(pbt.outstanding_requests_len(), 2);
-                assert_eq!(pbt.outstanding_pieces_len(), 1);
-                assert_eq!(pbt.pieces_not_started.len(), 1)
+                })
+        }
 
+        #[test]
+        fn correctly_assigns_pieces_when_not_hitting_threshold() {
+            let torrent = torrent_fixture(vec![1; 20]);
+            let mut pbt = PieceBlockTracker::new(2, &torrent.info.pieces);
+
+            let availiable_piece_to_peers = gen_availiable_piece_to_peers(&torrent);
+            let assignments = pbt.generate_assignments(&torrent, &availiable_piece_to_peers);
+            assert!(!assignments.is_empty());
+            // Expect max allowed requests to be dispatched.
+            // a piece may be larger than our max block size, so we may need more than one request to get one piece.
+            assert_eq!(pbt.outstanding_requests_len(), 2);
+            assert_eq!(pbt.outstanding_pieces_len(), 1);
+            assert_eq!(pbt.pieces_not_started.len(), 1);
         }
         #[test]
-        fn correctly_assigns_pieces_when_assigned_hitting_threshold() {
+        fn correctly_assigns_pieces_when_hitting_threshold() {
+            env_logger::init();
+            let pieces = 2;
+            let max_outstanding_requests: i64 = 2;
+            let torrent_len: i64 = (PIECE_BLOCK_SIZE * 4 * pieces) as _; // 4: requests per piece, 2 pieces total;
+            let piece_len = torrent_len / pieces as i64;
+            let expected_assignment_itterations = torrent_len / max_outstanding_requests;
+
+            let torrent = torrent_fixture_impl(vec![1; 20], 2, piece_len, torrent_len);
+
+            let mut pbt = PieceBlockTracker::new(max_outstanding_requests as usize, &torrent.info.pieces);
+            let availiable_piece_to_peers = gen_availiable_piece_to_peers(&torrent);
+
+
+            let mut requests_made: HashSet<PeerRequestedPiece> = HashSet::new();
+            let mut ack_reqs: Vec<PeerRequestedPiece> = vec![];
+            for i in 0..expected_assignment_itterations {
+                // start of the loop we essentially are making the previous iterations requests as complete.
+                for assigned in ack_reqs.drain(..).collect::<Vec<_>>() {
+                    pbt.set_request_finished(assigned.index, assigned.begin);
+                }
+                let assignments = pbt.generate_assignments(&torrent, &availiable_piece_to_peers);
+                println!("({}) assignments: {:?}", i, assignments);
+                assert!(!assignments.is_empty());
+
+                for req in assignments.iter() { // ensure we are not duplicating
+                    assert!(requests_made.insert(req.clone()) == true); 
+                }
+                ack_reqs = assignments;
+            }
         }
 
     }

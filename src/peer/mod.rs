@@ -124,20 +124,28 @@ pub async fn start_processing(torrent: V1Torrent, config: Config) -> Result<()> 
 mod test {
     use crate::model::{V1Piece, V1Torrent, V1TorrentInfo};
 
-    pub fn torrent_fixture(info_hash: Vec<u8>) -> V1Torrent {
+    pub fn torrent_fixture_impl(info_hash: Vec<u8>, pieces_len: usize, piece_length: i64, length: i64) -> V1Torrent {
+        let pieces = (1..= pieces_len)
+            .into_iter()
+            .map(|i| {
+                let id = (i * 11) as u8;
+                V1Piece { hash: vec![id; 20] }
+
+        }).collect();
         V1Torrent {
             info: V1TorrentInfo {
-                length: 10_240_000,
-                piece_length: 5120000,
+                length,
+                piece_length,
                 name: "test.txt".to_string(),
-                pieces: vec![
-                    V1Piece { hash: vec![11; 20] },
-                    V1Piece { hash: vec![22; 20] },
-                ],
+                pieces,
                 info_hash,
             },
             announce: String::new(),
             announce_list: vec![],
         }
+    }
+
+    pub fn torrent_fixture(info_hash: Vec<u8>) -> V1Torrent {
+        torrent_fixture_impl(info_hash, 2, 5_120_000, 10_240_000)
     }
 }
