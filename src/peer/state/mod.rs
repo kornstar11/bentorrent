@@ -775,7 +775,9 @@ impl TorrentProcessor {
                     let finished = io.write(index, begin, block).await?;
                     let mut state = state.lock().await;
                     log::info!("Request done! piece={}, begin={}", index, begin);
-                    state.torrent_state.piece_block_tracking.set_request_finished(index, begin);
+                    if let None = state.torrent_state.piece_block_tracking.set_request_finished(index, begin) {
+                        log::warn!("Request not found when setting finished: piece={}, begin={}", index, begin);
+                    }
                     if finished {
                         log::info!("Piece done! piece={}", index);
                         state.torrent_state.piece_block_tracking.set_piece_finished(index);

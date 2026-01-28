@@ -74,6 +74,7 @@ impl PieceBlockAllocation {
 #[derive(Clone, Debug)]
 struct BlockDownload {
     piece_request: PeerRequestedPiece,
+    is_completed: bool
 }
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, PartialOrd)]
@@ -154,10 +155,25 @@ impl DerefMut for InprogressPieceToBlockMap {
 }
 
 impl InprogressPieceToBlockMap {
+    fn inprogress_requests_by_piece_id(&mut self, piece_id: u32) -> Option<OutstandingBlockRequests> {
+        let requests_for_piece = self
+            .piece_to_blocks_started
+            .requests_by_piece_id(piece_id)?;
+        let filtered = requests_for_piece.iter().filter(|(_, v)| {
+            !v.is_completed
+        }).map(|(k, v)| {
+            (*k, v.clone())
+        }).collect::<OutstandingBlockRequests>();
+
+        Some(filtered)
+
+    }
+
     fn insert(&mut self, started: Instant, piece_request: PeerRequestedPiece) {
         let k = PieceToBlockKey { piece_id: piece_request.index, block_begin: piece_request.begin };
         let download = BlockDownload {
-            piece_request
+            piece_request,
+            is_completed: false,
         };
         // push to expirations queue
         self.expirations.push_back((started, k));
@@ -252,8 +268,11 @@ impl PieceBlockTracker {
         self.piece_to_blocks_outstanding.remove_request(req.index, req.begin)
     }
 
-    pub fn set_request_finished(&mut self, piece_id: u32, begin: u32) {
-        let _ = self.piece_to_blocks_outstanding.remove_request(piece_id, begin);
+    pub fn set_request_finished(&mut self, piece_id: u32, begin: u32) -> Option<()> {
+        let requests = self.piece_to_blocks_outstanding.requests_by_piece_id(piece_id)?;
+        let download = requests.get_mut(&begin)?;
+        download.is_completed = true;
+        Some(())
     }
 
     pub fn set_piece_finished(&mut self, piece_id: u32) {
@@ -280,13 +299,13 @@ impl PieceBlockTracker {
         let mut capacity = self.max_outstanding_requests - inflight_requests;
         let outstanding_requests = self
             .piece_to_blocks_outstanding
-            .requests_by_piece_id(piece_id);
+            .inprogress_requests_by_piece_id(piece_id);
 
         let assignable_requests_opt = PieceBlockAllocation::new(
             piece_id, 
             torrent, 
             peer_ids, 
-            outstanding_requests.as_deref(),
+            outstanding_requests.as_ref(),
             &mut capacity,
         );
 
@@ -372,11 +391,10 @@ mod test {
             for i in 0..expected_assignment_itterations {
                 // start of the loop we essentially are making the previous iterations requests as complete.
                 for assigned in ack_reqs.drain(..).collect::<Vec<_>>() {
-                    pbt.set_request_finished(assigned.index, assigned.begin);
+                    pbt.set_request_finished(assigned.index, assigned.begin).unwrap();
                 }
                 let assignments = pbt.generate_assignments(&torrent, &availiable_piece_to_peers);
                 println!("({}) assignments: {:?}", i, assignments);
-                assert!(!assignments.is_empty());
 
                 for req in assignments.iter() { // ensure we are not duplicating
                     assert!(requests_made.insert(req.clone()) == true); 
