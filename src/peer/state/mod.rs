@@ -382,7 +382,8 @@ impl TorrentProcessor {
                     let mut locked_state = state.lock().await;
                     let expired = locked_state.torrent_state.piece_block_tracking.remove_expired();
                     if !expired.is_empty() { // TODO handle expired requests
-                        log::warn!("Expired requests: {:?}", expired);
+                        log::warn!("Expired requests:, attempting more assignments {:?}", expired);
+                        //Self::compute_requests_for_download(Arc::clone(&state), &mut peer_to_tx).await;
                     }
                     let pieces_completed = locked_state.torrent_state.piece_block_tracking.pieces_completed_len();
                     let percent_completed = ((pieces_completed as f64) / (locked_state.torrent.info.pieces.len() as f64)) * 100.0;
