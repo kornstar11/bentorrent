@@ -315,6 +315,7 @@ mod test {
         #[test]
         fn correctly_assigns_pieces_when_hitting_threshold() {
             env_logger::init();
+            // Test shows we do not track requests that are complete!
             let pieces = 2;
             let max_outstanding_requests: i64 = 2;
             let torrent_len: i64 = (PIECE_BLOCK_SIZE * 4 * pieces) as _; // 4: requests per piece, 2 pieces total;
