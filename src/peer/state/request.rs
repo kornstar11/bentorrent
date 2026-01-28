@@ -317,8 +317,7 @@ impl PieceBlockTracker {
         if let Some(alloc) = assignable_requests_opt {
             let allocated_requests = alloc.requests_to_make;
             if !allocated_requests.is_empty() {
-                // starting piece
-                log::trace!("Allocateding REQs: {}", piece_id);
+                // starting piece, so remove it from the starting bucket.
                 let _ = self.pieces_not_started.remove(&piece_id);
             }
             for req in allocated_requests.iter() {
