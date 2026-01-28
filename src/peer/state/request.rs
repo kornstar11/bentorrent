@@ -1,4 +1,4 @@
-use std::{collections::{BTreeMap, HashMap, HashSet, VecDeque}, sync::Arc, time::{Duration, Instant}};
+use std::{collections::{BTreeMap, HashMap, HashSet, VecDeque}, ops::{Deref, DerefMut}, sync::Arc, time::{Duration, Instant}};
 
 use crate::{
     model::{InternalPeerId, PeerRequestedPiece, V1Piece, V1Torrent},
@@ -7,6 +7,7 @@ use crate::{
 
 // within a piece this maps the blocks using the "begin" as the key
 type OutstandingBlockRequests = BTreeMap<u32, BlockDownload>;
+//type PieceToBlockMap = HashMap<u32, OutstandingBlockRequests>;
 
 ///
 /// Per piece, we need to break it into blocks that can be requested. This helps keep track of this process
@@ -80,13 +81,79 @@ struct PieceToBlockKey {
     piece_id: u32,
     block_begin: u32,
 }
+
 #[derive(Debug, Default)]
 struct PieceToBlockMap {
-    piece_to_blocks_started: HashMap<u32, OutstandingBlockRequests>,
-    expirations: VecDeque<(Instant, PieceToBlockKey)>
+    inner: HashMap<u32, OutstandingBlockRequests>,
 }
 
 impl PieceToBlockMap {
+    fn requests_by_piece_id(&mut self, piece_id: u32) -> Option<&mut OutstandingBlockRequests> {
+        self
+            .inner
+            .get_mut(&piece_id)
+    }
+
+    fn remove_request(&mut self, piece_id: u32, begin: u32) -> bool {
+        self.requests_by_piece_id(piece_id)
+            .map(|reqs| reqs.remove(&begin)).is_some()
+    }
+
+    fn remove_piece(&mut self, piece_id: u32) -> bool {
+        self
+            .inner
+            .remove(&piece_id).is_some()
+    }
+
+    fn all_outstanding_requests(&self) -> Vec<BlockDownload> {
+        self.inner.iter().flat_map(|(_, requests)| {
+            requests.iter().map(|(_, request)| {request.clone()})
+        }).collect()
+    }
+
+    fn outstanding_pieces(&self) -> impl Iterator<Item = u32> {
+        self.inner.iter().map(|(k, _)| {
+            *k
+        })
+    }
+}
+
+impl Deref for PieceToBlockMap {
+    type Target = HashMap<u32, OutstandingBlockRequests>;
+    
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for PieceToBlockMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+
+#[derive(Debug, Default)]
+struct InprogressPieceToBlockMap {
+    piece_to_blocks_started: PieceToBlockMap,
+    expirations: VecDeque<(Instant, PieceToBlockKey)>
+}
+
+impl Deref for InprogressPieceToBlockMap {
+    type Target = PieceToBlockMap;
+    
+    fn deref(&self) -> &Self::Target {
+        &self.piece_to_blocks_started
+    }
+}
+
+impl DerefMut for InprogressPieceToBlockMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.piece_to_blocks_started
+    }
+}
+
+impl InprogressPieceToBlockMap {
     fn insert(&mut self, started: Instant, piece_request: PeerRequestedPiece) {
         let k = PieceToBlockKey { piece_id: piece_request.index, block_begin: piece_request.begin };
         let download = BlockDownload {
@@ -99,15 +166,6 @@ impl PieceToBlockMap {
             .entry(k.piece_id)
             .or_insert_with(|| BTreeMap::default());
         let _ = block_map.insert(k.block_begin, download);
-    }
-
-    fn remove_request(&mut self, piece_id: u32, begin: u32) -> bool {
-        self.inprogress_requests_by_piece_id(piece_id)
-            .map(|reqs| reqs.remove(&begin)).is_some()
-    }
-
-    fn remove_piece(&mut self, piece_id: u32) -> bool {
-        self.piece_to_blocks_started.remove(&piece_id).is_some()
     }
 
     fn remove_expired(&mut self, time: Instant, ttl: Duration) -> Vec<PeerRequestedPiece> {
@@ -132,25 +190,6 @@ impl PieceToBlockMap {
         }
         acc
     }
-
-    fn all_outstanding_requests(&self) -> Vec<BlockDownload> {
-        self.piece_to_blocks_started.iter().flat_map(|(_, requests)| {
-            requests.iter().map(|(_, request)| {request.clone()})
-        }).collect()
-    }
-
-    fn outstanding_pieces(&self) -> impl Iterator<Item = u32> {
-        self.piece_to_blocks_started.iter().map(|(k, _)| {
-            *k
-        })
-    }
-
-    fn inprogress_requests_by_piece_id(&mut self, piece_id: u32) -> Option<&mut OutstandingBlockRequests> {
-        self
-            .piece_to_blocks_started
-            .get_mut(&piece_id)
-    }
-    
 }
 
 #[derive(Default, Debug)]
@@ -159,7 +198,7 @@ pub struct PieceBlockTracker {
     request_timeout: Duration,
     pieces_not_started: HashSet<u32>,
     // mapping of piece_id to chunk start (begin in the protocol)
-    piece_to_blocks_started: PieceToBlockMap,
+    piece_to_blocks_started: InprogressPieceToBlockMap,
     //piece_to_blocks_started: HashMap<u32, OutstandingBlockRequests>,
     pieces_completed: HashSet<u32>,
 }
@@ -241,7 +280,7 @@ impl PieceBlockTracker {
         let mut capacity = self.max_outstanding_requests - inflight_requests;
         let outstanding_requests = self
             .piece_to_blocks_started
-            .inprogress_requests_by_piece_id(piece_id);
+            .requests_by_piece_id(piece_id);
 
         let assignable_requests_opt = PieceBlockAllocation::new(
             piece_id, 
