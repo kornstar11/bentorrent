@@ -116,7 +116,7 @@ pub async fn start_processing(torrent: V1Torrent, config: Config) -> Result<()> 
         Box::new(MemoryTorrentIO::new(torrent.clone()).await)
     };
     let io = IoHandler::new(config.clone(), io).await?;
-    let torrent_processor = TorrentProcessor::new(Arc::clone(&our_id), torrent.clone(), io);
+    let torrent_processor = TorrentProcessor::new(config.clone(), Arc::clone(&our_id), torrent.clone(), io);
     inner_start_processing(torrent, torrent_processor, our_id, config).await
 }
 

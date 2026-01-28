@@ -5,6 +5,7 @@ pub struct Config {
     pub peer_tx_size: usize,
     pub peer_rx_size: usize,
     pub file_handler_channel_size: usize,
+    pub max_outstanding_requests: usize,
 }
 
 impl Config {
@@ -15,6 +16,7 @@ impl Config {
             peer_tx_size: 128,
             peer_rx_size: 128,
             file_handler_channel_size: 2,
+            max_outstanding_requests: 4,
         }
     }
 }

@@ -1,4 +1,5 @@
 mod request;
+use crate::config::Config;
 use crate::model::{InternalPeerId, PeerId};
 use crate::model::{PeerRequestedPiece, V1Piece, V1Torrent};
 use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter, BitFieldWriter};
@@ -147,8 +148,8 @@ struct TorrentState {
 }
 
 impl TorrentState {
-    pub fn new(pieces: &Vec<V1Piece>) -> Self {
-        let piece_block_tracking = PieceBlockTracker::new(4, pieces);
+    pub fn new(pieces: &Vec<V1Piece>, max_outstanding_requests: usize) -> Self {
+        let piece_block_tracking = PieceBlockTracker::new(max_outstanding_requests, pieces);
         Self {
             piece_block_tracking,
             ..Default::default()
@@ -303,8 +304,8 @@ pub struct TorrentProcessor {
 }
 
 impl TorrentProcessor {
-    pub fn new(our_id: InternalPeerId, torrent: V1Torrent, io: IoHandler) -> Self {
-        let torrent_state = TorrentState::new(&torrent.info.pieces);
+    pub fn new(config: Config, our_id: InternalPeerId, torrent: V1Torrent, io: IoHandler) -> Self {
+        let torrent_state = TorrentState::new(&torrent.info.pieces, config.max_outstanding_requests);
         Self {
             our_id,
             torrent,
@@ -844,10 +845,12 @@ mod test {
     }
 
     async fn setup_test() -> (JoinHandle<()>, Sender<Messages>, Receiver<Messages>) {
+        let mut config = Config::new();
+        config.max_outstanding_requests = 1024;
         let torrent = torrent_fixture(vec![1 as u8, 20]);
         let io = Box::new(MemoryTorrentIO::new(torrent.clone()).await);
-        let io = IoHandler::new(Config::new(), io).await.unwrap();
-        let processor = TorrentProcessor::new(Arc::new(vec![1, 2, 3]), torrent.clone(), io);
+        let io = IoHandler::new(config.clone(), io).await.unwrap();
+        let processor = TorrentProcessor::new(config,Arc::new(vec![1, 2, 3]), torrent.clone(), io);
 
         // channel for new connections
         let (conn_tx, conn_rx) = channel(1);
