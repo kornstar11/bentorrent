@@ -36,6 +36,9 @@ impl PieceBlockAllocation {
                 allocation.max_piece_size
             };
             for begin in (0..piece_size).step_by(PIECE_BLOCK_SIZE) {
+                if *request_capacity == 0 {
+                    break;
+                }
                 let outstanding_requests = outstanding_requests.unwrap_or_else(|| &empty_outstanding_requests);
                 let already_requested = outstanding_requests
                     .get(&(begin as u32))
@@ -47,7 +50,7 @@ impl PieceBlockAllocation {
                         }
                     })
                     .is_some();
-                if already_requested || *request_capacity == 0 { // skip based on the "begin" parameter and the piece_id, or no more request capacity is left.
+                if already_requested { // skip based on the "begin" parameter and the piece_id, or no more request capacity is left.
                     continue;
                 }
                 (*request_capacity) -= 1;
@@ -106,10 +109,10 @@ impl PieceToBlockMap {
             .remove(&piece_id).is_some()
     }
 
-    fn requests(&self) -> Vec<BlockDownload> {
+    fn requests(&self) -> impl Iterator<Item = BlockDownload> {
         self.inner.iter().flat_map(|(_, requests)| {
             requests.iter().map(|(_, request)| {request.clone()})
-        }).collect()
+        })
     }
 
     fn pieces(&self) -> impl Iterator<Item = u32> {
@@ -156,17 +159,17 @@ impl DerefMut for InprogressPieceToBlockMap {
 
 impl InprogressPieceToBlockMap {
     fn inprogress_requests_by_piece_id(&mut self, piece_id: u32) -> Option<OutstandingBlockRequests> {
-        let requests_for_piece = self
-            .piece_to_blocks_started
-            .requests_by_piece_id(piece_id)?;
-        let filtered = requests_for_piece.iter().filter(|(_, v)| {
-            !v.is_completed
-        }).map(|(k, v)| {
-            (*k, v.clone())
-        }).collect::<OutstandingBlockRequests>();
+        let inprogress_requests_by_piece_id = {
+            let requests_for_piece = self
+                .piece_to_blocks_started
+                .requests_by_piece_id(piece_id)?;
+            let filtered = requests_for_piece.iter().map(|(k, v)| {
+                (*k, v.clone())
+            }).collect::<OutstandingBlockRequests>();
 
-        Some(filtered)
-
+            Some(filtered)
+        };
+        inprogress_requests_by_piece_id
     }
 
     fn insert(&mut self, started: Instant, piece_request: PeerRequestedPiece) {
@@ -256,7 +259,9 @@ impl PieceBlockTracker {
     }
 
     pub fn outstanding_requests_len(&self) -> usize {
-        self.piece_to_blocks_outstanding.requests().len()
+        self.piece_to_blocks_outstanding.requests().filter(|v| {
+            !v.is_completed
+        }).count()
     }
 
     pub fn outstanding_pieces_len(&self) -> usize {
@@ -317,7 +322,7 @@ impl PieceBlockTracker {
                 let _ = self.pieces_not_started.remove(&piece_id);
             }
             for req in allocated_requests.iter() {
-                log::trace!("Allocated REQ: {} :: {:?}", piece_id, allocated_requests);
+                log::trace!("Allocated REQ: {} :: {:?}", piece_id, req);
                 self.piece_to_blocks_outstanding.insert(now, req.clone());
             }
             allocated_requests
@@ -376,9 +381,9 @@ mod test {
             // Test shows we do not track requests that are complete!
             let pieces = 2;
             let max_outstanding_requests: i64 = 2;
+            let expected_assignment_itterations = 4;
             let torrent_len: i64 = (PIECE_BLOCK_SIZE * 4 * pieces) as _; // 4: requests per piece, 2 pieces total;
             let piece_len = torrent_len / pieces as i64;
-            let expected_assignment_itterations = torrent_len / max_outstanding_requests;
 
             let torrent = torrent_fixture_impl(vec![1; 20], 2, piece_len, torrent_len);
 
@@ -395,6 +400,7 @@ mod test {
                 }
                 let assignments = pbt.generate_assignments(&torrent, &availiable_piece_to_peers);
                 println!("({}) assignments: {:?}", i, assignments);
+                assert!(!assignments.is_empty());
 
                 for req in assignments.iter() { // ensure we are not duplicating
                     assert!(requests_made.insert(req.clone()) == true); 
