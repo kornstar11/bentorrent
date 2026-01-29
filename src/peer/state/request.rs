@@ -1,4 +1,4 @@
-use std::{collections::{BTreeMap, HashMap, HashSet, VecDeque}, ops::{Deref, DerefMut}, sync::Arc, time::{Duration, Instant}};
+use std::{collections::{BTreeMap, HashMap, HashSet, VecDeque, btree_map::Entry}, ops::{Deref, DerefMut}, sync::Arc, time::{Duration, Instant}};
 
 use crate::{
     model::{InternalPeerId, PeerRequestedPiece, V1Piece, V1Torrent},
@@ -198,8 +198,16 @@ impl InprogressPieceToBlockMap {
                 if let Some(expired) = self.piece_to_blocks_started
                     .get_mut(&k.piece_id)
                     .and_then(|begin_map| {
-                        begin_map.remove(&k.block_begin)
-                }) {
+                        // at this point we still need to decide if we should remove it, if it was is_completed == false (in progress) the drop it
+                        match begin_map.entry(k.block_begin) {
+                            Entry::Occupied(o) if !o.get().is_completed => { // is expired
+                                Some(o.remove())
+                            },
+                            _ => { //if it was complete, leave it
+                                None
+                            }
+                        }
+                }) { 
                     acc.push(expired.piece_request);
                 }
             } else {
@@ -345,6 +353,8 @@ mod test {
     use crate::peer::test::{torrent_fixture, torrent_fixture_impl};
 
     mod piece_block_tracker_tests {
+        use std::thread::sleep;
+
         use super::*;
 
         fn gen_availiable_piece_to_peers(torrent: &V1Torrent) -> HashMap<u32, HashSet<InternalPeerId>> {
@@ -358,6 +368,18 @@ mod test {
                     let _ = acc.insert(ele.0 as u32, ele.1);
                     acc
                 })
+        }
+
+        fn setup_piece_block_tracker() -> (PieceBlockTracker, V1Torrent, usize) {
+            let pieces = 2;
+            let max_outstanding_requests: i64 = 2;
+            let requests_per_piece = 4;
+            let torrent_len: i64 = (PIECE_BLOCK_SIZE * requests_per_piece * pieces) as _; // 4: requests per piece, 2 pieces total;
+            let piece_len = torrent_len / pieces as i64;
+            let torrent = torrent_fixture_impl(vec![1; 20], 2, piece_len, torrent_len);
+
+            let pbt = PieceBlockTracker::new(max_outstanding_requests as usize, &torrent.info.pieces);
+            (pbt, torrent, requests_per_piece)
         }
 
         #[test]
@@ -374,31 +396,53 @@ mod test {
             assert_eq!(pbt.outstanding_pieces_len(), 1);
             assert_eq!(pbt.pieces_not_started.len(), 1);
         }
+
         #[test]
-        fn correctly_assigns_pieces_when_hitting_threshold() {
-            env_logger::init();
-            // Test shows we do not track requests that are complete!
-            let pieces = 2;
-            let max_outstanding_requests: i64 = 2;
-            let expected_assignment_itterations = 4;
-            let torrent_len: i64 = (PIECE_BLOCK_SIZE * 4 * pieces) as _; // 4: requests per piece, 2 pieces total;
-            let piece_len = torrent_len / pieces as i64;
-
-            let torrent = torrent_fixture_impl(vec![1; 20], 2, piece_len, torrent_len);
-
-            let mut pbt = PieceBlockTracker::new(max_outstanding_requests as usize, &torrent.info.pieces);
+        fn correctly_expires_completed_requests_by_not_expiring() {
+            let (mut pbt, torrent, _) = setup_piece_block_tracker();
             let availiable_piece_to_peers = gen_availiable_piece_to_peers(&torrent);
 
+            let assignments = pbt.generate_assignments(&torrent, &availiable_piece_to_peers);
+            assert!(!assignments.is_empty());
+
+            for assigned in assignments {
+                pbt.set_request_finished(assigned.index, assigned.begin).unwrap();
+            }
+            sleep(Duration::from_secs(11)); // todo mock instant to remove this
+
+            let expired = pbt.remove_expired(); // set_request_finished was called, expect not expirations
+            assert!(expired.is_empty());
+        }
+
+        #[test]
+        fn correctly_expires_incompleted_requests_by_expiring() {
+            // centralize boilerplate
+            let (mut pbt, torrent, _) = setup_piece_block_tracker();
+            let availiable_piece_to_peers = gen_availiable_piece_to_peers(&torrent);
+
+            let assignments = pbt.generate_assignments(&torrent, &availiable_piece_to_peers);
+            assert!(!assignments.is_empty());
+
+            sleep(Duration::from_secs(11)); // todo mock instant to remove this
+
+            let expired = pbt.remove_expired(); // set_request_finished was called, expect not expirations
+            assert!(expired.len() == 2);
+        }
+
+        #[test]
+        fn correctly_assigns_pieces_when_hitting_threshold() {
+            // Test shows we do not track requests that are complete!
+            let (mut pbt, torrent, requests_per_piece) = setup_piece_block_tracker();
+            let availiable_piece_to_peers = gen_availiable_piece_to_peers(&torrent);
 
             let mut requests_made: HashSet<PeerRequestedPiece> = HashSet::new();
             let mut ack_reqs: Vec<PeerRequestedPiece> = vec![];
-            for i in 0..expected_assignment_itterations {
+            for _ in 0..requests_per_piece {
                 // start of the loop we essentially are making the previous iterations requests as complete.
                 for assigned in ack_reqs.drain(..).collect::<Vec<_>>() {
                     pbt.set_request_finished(assigned.index, assigned.begin).unwrap();
                 }
                 let assignments = pbt.generate_assignments(&torrent, &availiable_piece_to_peers);
-                println!("({}) assignments: {:?}", i, assignments);
                 assert!(!assignments.is_empty());
 
                 for req in assignments.iter() { // ensure we are not duplicating
