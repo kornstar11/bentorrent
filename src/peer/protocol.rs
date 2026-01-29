@@ -134,7 +134,11 @@ pub enum Messages {
 
 impl From<&PeerRequestedPiece> for Messages {
     fn from(v: &PeerRequestedPiece) -> Self {
-        Messages::Request { index: v.index, begin: v.begin, length: v.length }
+        Messages::Request {
+            index: v.index,
+            begin: v.begin,
+            length: v.length,
+        }
     }
 }
 

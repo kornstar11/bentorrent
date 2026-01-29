@@ -305,7 +305,8 @@ pub struct TorrentProcessor {
 
 impl TorrentProcessor {
     pub fn new(config: Config, our_id: InternalPeerId, torrent: V1Torrent, io: IoHandler) -> Self {
-        let torrent_state = TorrentState::new(&torrent.info.pieces, config.max_outstanding_requests);
+        let torrent_state =
+            TorrentState::new(&torrent.info.pieces, config.max_outstanding_requests);
         Self {
             our_id,
             torrent,
@@ -588,9 +589,7 @@ impl TorrentProcessor {
 
         let torrent = locked_state.torrent.clone();
 
-        let peer_to_pieces_availaible = locked_state
-            .torrent_state
-            .piece_id_to_peers();
+        let peer_to_pieces_availaible = locked_state.torrent_state.piece_id_to_peers();
 
         let requests = locked_state
             .torrent_state
@@ -601,12 +600,23 @@ impl TorrentProcessor {
         for request in requests.into_iter() {
             log::trace!("Dispatch request for piece_id {}", request.index);
             if let Some(tx) = peer_to_tx.get(&request.peer_id) {
-                if let Ok(_) = tx.send(Messages::Request { index: request.index, begin: request.begin, length: request.length }).await {
+                if let Ok(_) = tx
+                    .send(Messages::Request {
+                        index: request.index,
+                        begin: request.begin,
+                        length: request.length,
+                    })
+                    .await
+                {
                     continue;
                 }
             }
             log::warn!("Unable to dispatch {:?}", request);
-            if !locked_state.torrent_state.piece_block_tracking.remove_request(request) {
+            if !locked_state
+                .torrent_state
+                .piece_block_tracking
+                .remove_request(request)
+            {
                 log::warn!("Request not found for removal")
             }
         }
@@ -621,7 +631,10 @@ impl TorrentProcessor {
         let state = state.lock().await;
         let mut bitfield = BitFieldWriter::new(BytesMut::new());
         bitfield.put_bit_set(
-            state.torrent_state.piece_block_tracking.get_pieces_completed(),
+            state
+                .torrent_state
+                .piece_block_tracking
+                .get_pieces_completed(),
             state.torrent.info.pieces.len(),
         );
         let bitfield = Messages::BitField {
@@ -686,9 +699,7 @@ impl TorrentProcessor {
                             .torrent_state
                             .set_peers_interested_in_us(Arc::clone(&peer_id), false),
                     };
-                    unlock_and_send!(wake_tx, state, {
-                        InternalStateMessage::Wakeup
-                    });
+                    unlock_and_send!(wake_tx, state, { InternalStateMessage::Wakeup });
                 }
                 Messages::Have { piece_index } => {
                     let mut state = state.lock().await;
@@ -702,9 +713,7 @@ impl TorrentProcessor {
                             break;
                         }
                     }
-                    unlock_and_send!(wake_tx, state, {
-                        InternalStateMessage::Wakeup
-                    });
+                    unlock_and_send!(wake_tx, state, { InternalStateMessage::Wakeup });
                 }
                 Messages::BitField { bitfield } => {
                     let mut state = state.lock().await;
@@ -728,9 +737,7 @@ impl TorrentProcessor {
                         }
                     }
 
-                    unlock_and_send!(wake_tx, state, {
-                        InternalStateMessage::Wakeup
-                    });
+                    unlock_and_send!(wake_tx, state, { InternalStateMessage::Wakeup });
                 }
                 Messages::Request {
                     index,
@@ -775,19 +782,28 @@ impl TorrentProcessor {
                     let mut state = state.lock().await;
                     if finished {
                         log::debug!("Piece done! piece={}", index);
-                        state.torrent_state.piece_block_tracking.set_piece_finished(index);
+                        state
+                            .torrent_state
+                            .piece_block_tracking
+                            .set_piece_finished(index);
 
                         unlock_and_send!(wake_tx, state, {
                             InternalStateMessage::PieceComplete { piece_id: index }
                         });
                     } else {
                         log::debug!("Request done! piece={}, begin={}", index, begin);
-                        if let None = state.torrent_state.piece_block_tracking.set_request_finished(index, begin) {
-                            log::warn!("Request not found when setting finished: piece={}, begin={}", index, begin);
+                        if let None = state
+                            .torrent_state
+                            .piece_block_tracking
+                            .set_request_finished(index, begin)
+                        {
+                            log::warn!(
+                                "Request not found when setting finished: piece={}, begin={}",
+                                index,
+                                begin
+                            );
                         }
-                        unlock_and_send!(wake_tx, state, {
-                            InternalStateMessage::Wakeup
-                        });
+                        unlock_and_send!(wake_tx, state, { InternalStateMessage::Wakeup });
                     }
                 }
             }
@@ -852,7 +868,7 @@ mod test {
         let torrent = torrent_fixture(vec![1 as u8, 20]);
         let io = Box::new(MemoryTorrentIO::new(torrent.clone()).await);
         let io = IoHandler::new(config.clone(), io).await.unwrap();
-        let processor = TorrentProcessor::new(config,Arc::new(vec![1, 2, 3]), torrent.clone(), io);
+        let processor = TorrentProcessor::new(config, Arc::new(vec![1, 2, 3]), torrent.clone(), io);
 
         // channel for new connections
         let (conn_tx, conn_rx) = channel(1);

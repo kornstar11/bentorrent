@@ -116,7 +116,8 @@ pub async fn start_processing(torrent: V1Torrent, config: Config) -> Result<()> 
         Box::new(MemoryTorrentIO::new(torrent.clone()).await)
     };
     let io = IoHandler::new(config.clone(), io).await?;
-    let torrent_processor = TorrentProcessor::new(config.clone(), Arc::clone(&our_id), torrent.clone(), io);
+    let torrent_processor =
+        TorrentProcessor::new(config.clone(), Arc::clone(&our_id), torrent.clone(), io);
     inner_start_processing(torrent, torrent_processor, our_id, config).await
 }
 
@@ -124,14 +125,19 @@ pub async fn start_processing(torrent: V1Torrent, config: Config) -> Result<()> 
 mod test {
     use crate::model::{V1Piece, V1Torrent, V1TorrentInfo};
 
-    pub fn torrent_fixture_impl(info_hash: Vec<u8>, pieces_len: usize, piece_length: i64, length: i64) -> V1Torrent {
-        let pieces = (1..= pieces_len)
+    pub fn torrent_fixture_impl(
+        info_hash: Vec<u8>,
+        pieces_len: usize,
+        piece_length: i64,
+        length: i64,
+    ) -> V1Torrent {
+        let pieces = (1..=pieces_len)
             .into_iter()
             .map(|i| {
                 let id = (i * 11) as u8;
                 V1Piece { hash: vec![id; 20] }
-
-        }).collect();
+            })
+            .collect();
         V1Torrent {
             info: V1TorrentInfo {
                 length,
