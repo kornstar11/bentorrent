@@ -332,7 +332,13 @@ impl PieceBlockTracker {
     }
 
     pub fn generate_assignments(&mut self, torrent: &V1Torrent, availiable_piece_to_peers: &HashMap<u32, HashSet<InternalPeerId>>) -> Vec<PeerRequestedPiece> {
-        availiable_piece_to_peers.iter().flat_map(|(piece_id, peers_with_piece)|{
+        // TODO we need a nice way to decide what pieces we should get next.
+        let sorted = availiable_piece_to_peers
+            .clone()
+            .into_iter()
+            .collect::<BTreeMap<u32, HashSet<InternalPeerId>>>();
+
+        sorted.iter().flat_map(|(piece_id, peers_with_piece)|{
             self.assign_piece(&torrent, *piece_id, peers_with_piece)
                 .into_iter()
         }).collect::<Vec<_>>()

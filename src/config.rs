@@ -16,7 +16,7 @@ impl Config {
             peer_tx_size: 128,
             peer_rx_size: 128,
             file_handler_channel_size: 2,
-            max_outstanding_requests: 4,
+            max_outstanding_requests: 128,
         }
     }
 }
