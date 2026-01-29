@@ -21,7 +21,7 @@ impl PieceBlockAllocation {
         piece_id: u32,
         torrent: &V1Torrent,
         peer_ids: &HashSet<InternalPeerId>,
-        outstanding_requests: Option<&OutstandingBlockRequests>,
+        requested_requests: Option<&OutstandingBlockRequests>, // we don't want to re-request the same thing again and again, so filter on this
         request_capacity: &mut usize,
     ) -> Option<Self> {
         let empty_outstanding_requests = BTreeMap::new(); // TODO gross, find another way
@@ -39,16 +39,9 @@ impl PieceBlockAllocation {
                 if *request_capacity == 0 {
                     break;
                 }
-                let outstanding_requests = outstanding_requests.unwrap_or_else(|| &empty_outstanding_requests);
-                let already_requested = outstanding_requests
+                let requested_requests = requested_requests.unwrap_or_else(|| &empty_outstanding_requests);
+                let already_requested = requested_requests
                     .get(&(begin as u32))
-                    .and_then(|req| { // this may not be needed
-                        if req.piece_request.index == piece_id {
-                            Some(req)
-                        } else {
-                            None
-                        }
-                    })
                     .is_some();
                 if already_requested { // skip based on the "begin" parameter and the piece_id, or no more request capacity is left.
                     continue;
@@ -310,7 +303,7 @@ impl PieceBlockTracker {
         // as it stands we dont plan any initial requests after this method is called, and because of this we become stalled.
         let inflight_requests = self.outstanding_requests_len();
         let mut capacity = self.max_outstanding_requests - inflight_requests;
-        let outstanding_requests = self
+        let requested_requests = self
             .piece_to_blocks_outstanding
             .inprogress_requests_by_piece_id(piece_id);
 
@@ -318,7 +311,7 @@ impl PieceBlockTracker {
             piece_id, 
             torrent, 
             peer_ids, 
-            outstanding_requests.as_ref(),
+            requested_requests.as_ref(),
             &mut capacity,
         );
 
