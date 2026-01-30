@@ -10,9 +10,6 @@ use crate::{model::V1Torrent, peer::TorrentAllocation};
 
 #[async_trait]
 pub trait TorrentIO: Send {
-    //fn write_piece(&'static mut self, index: u32, begin: u32, block: Vec<u8>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + Sync>>;
-
-    //async fn write_piece(&mut self, index: u32, begin: u32, block: Vec<u8>) -> Result<bool>;
     async fn write_piece(&mut self, index: u32, begin: u32, block: Vec<u8>) -> Result<bool>;
     async fn read_piece(&mut self, index: u32, begin: u32, length: u32) -> Result<Vec<u8>>;
 }

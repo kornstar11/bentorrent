@@ -94,6 +94,14 @@ impl PieceToBlockMap {
         self.inner.get_mut(&piece_id)
     }
 
+    fn set_request_finished(&mut self, piece_id: u32, begin: u32) -> Option<()> {
+        let requests = self
+            .requests_by_piece_id(piece_id)?;
+        let download = requests.get_mut(&begin)?;
+        download.is_completed = true;
+        Some(())
+    }
+
     fn remove_request(&mut self, piece_id: u32, begin: u32) -> bool {
         self.requests_by_piece_id(piece_id)
             .map(|reqs| reqs.remove(&begin))
@@ -110,8 +118,27 @@ impl PieceToBlockMap {
             .flat_map(|(_, requests)| requests.iter().map(|(_, request)| request.clone()))
     }
 
+    fn outstanding_requests_len(&self) -> usize {
+        self
+            .requests()
+            .filter(|v| !v.is_completed)
+            .count()
+    }
+
     fn pieces(&self) -> impl Iterator<Item = u32> {
         self.inner.iter().map(|(k, _)| *k)
+    }
+
+    fn insert_request(&mut self, piece_request: PeerRequestedPiece) {
+        let download = BlockDownload {
+            piece_request,
+            is_completed: false,
+        };
+        let block_map = self
+            .inner
+            .entry(download.piece_request.index)
+            .or_insert_with(|| BTreeMap::default());
+        let _ = block_map.insert(download.piece_request.begin, download);
     }
 }
 
@@ -173,17 +200,8 @@ impl InprogressPieceToBlockMap {
             piece_id: piece_request.index,
             block_begin: piece_request.begin,
         };
-        let download = BlockDownload {
-            piece_request,
-            is_completed: false,
-        };
-        // push to expirations queue
         self.expirations.push_back((started, k));
-        let block_map = self
-            .piece_to_blocks_started
-            .entry(k.piece_id)
-            .or_insert_with(|| BTreeMap::default());
-        let _ = block_map.insert(k.block_begin, download);
+        self.piece_to_blocks_started.insert_request(piece_request);
     }
 
     fn remove_expired(&mut self, time: Instant, ttl: Duration) -> Vec<PeerRequestedPiece> {
@@ -229,7 +247,6 @@ pub struct PieceBlockTracker {
     pieces_not_started: HashSet<u32>,
     // mapping of piece_id to chunk start (begin in the protocol)
     piece_to_blocks_outstanding: InprogressPieceToBlockMap,
-    //piece_to_blocks_started: HashMap<u32, OutstandingBlockRequests>,
     pieces_completed: HashSet<u32>,
 }
 
@@ -266,10 +283,7 @@ impl PieceBlockTracker {
     }
 
     pub fn outstanding_requests_len(&self) -> usize {
-        self.piece_to_blocks_outstanding
-            .requests()
-            .filter(|v| !v.is_completed)
-            .count()
+        self.piece_to_blocks_outstanding.outstanding_requests_len()
     }
 
     pub fn outstanding_pieces_len(&self) -> usize {
@@ -283,12 +297,7 @@ impl PieceBlockTracker {
     }
 
     pub fn set_request_finished(&mut self, piece_id: u32, begin: u32) -> Option<()> {
-        let requests = self
-            .piece_to_blocks_outstanding
-            .requests_by_piece_id(piece_id)?;
-        let download = requests.get_mut(&begin)?;
-        download.is_completed = true;
-        Some(())
+        self.piece_to_blocks_outstanding.set_request_finished(piece_id, begin)
     }
 
     pub fn set_piece_finished(&mut self, piece_id: u32) {
