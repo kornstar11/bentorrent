@@ -10,7 +10,7 @@ use anyhow::Result;
 use bytes::BytesMut;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -250,7 +250,7 @@ impl TorrentState {
 
     // ///
     // /// returns a map where the key is the piece_id, and value is the peers that HAVE that piece
-    pub fn piece_id_to_peers(&mut self) -> HashMap<u32, HashSet<InternalPeerId>> {
+    pub fn piece_id_to_peers(&mut self) -> BTreeMap<u32, HashSet<InternalPeerId>> {
         let peer_we_can_download_from = self.peers_that_choke(false);
         self.piece_block_tracking
             .get_incomplete_pieces()

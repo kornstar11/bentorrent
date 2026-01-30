@@ -348,15 +348,15 @@ impl PieceBlockTracker {
     pub fn generate_assignments(
         &mut self,
         torrent: &V1Torrent,
-        availiable_piece_to_peers: &HashMap<u32, HashSet<InternalPeerId>>,
+        availiable_piece_to_peers: &BTreeMap<u32, HashSet<InternalPeerId>>,
     ) -> Vec<PeerRequestedPiece> {
         // TODO we need a nice way to decide what pieces we should get next.
-        let sorted = availiable_piece_to_peers
-            .clone()
-            .into_iter()
-            .collect::<BTreeMap<u32, HashSet<InternalPeerId>>>();
+        // let sorted = availiable_piece_to_peers
+        //     .clone()
+        //     .into_iter()
+        //     .collect::<BTreeMap<u32, HashSet<InternalPeerId>>>();
 
-        sorted
+        availiable_piece_to_peers
             .iter()
             .flat_map(|(piece_id, peers_with_piece)| {
                 self.assign_piece(&torrent, *piece_id, peers_with_piece)
@@ -378,7 +378,7 @@ mod test {
 
         fn gen_availiable_piece_to_peers(
             torrent: &V1Torrent,
-        ) -> HashMap<u32, HashSet<InternalPeerId>> {
+        ) -> BTreeMap<u32, HashSet<InternalPeerId>> {
             let peers = vec![Arc::new(vec![0; 10])]
                 .into_iter()
                 .collect::<HashSet<_>>();
@@ -388,7 +388,7 @@ mod test {
                 .iter()
                 .enumerate()
                 .map(|(idx, _)| (idx, peers.clone()))
-                .fold(HashMap::new(), |mut acc, ele| {
+                .fold(BTreeMap::new(), |mut acc, ele| {
                     let _ = acc.insert(ele.0 as u32, ele.1);
                     acc
                 })
