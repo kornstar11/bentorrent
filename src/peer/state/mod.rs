@@ -1,11 +1,11 @@
-mod request;
+mod piece;
 use crate::config::Config;
 use crate::model::{InternalPeerId, PeerId};
 use crate::model::{PeerRequestedPiece, V1Piece, V1Torrent};
 use crate::peer::bitfield::{BitFieldReader, BitFieldReaderIter, BitFieldWriter};
 use crate::peer::io::IoHandler;
 use crate::peer::protocol::{FlagMessages, Handshake};
-use crate::peer::state::request::PieceBlockTracker;
+use crate::peer::state::piece::PieceBlockTracker;
 use anyhow::Result;
 use bytes::BytesMut;
 use futures::StreamExt;
@@ -30,8 +30,8 @@ macro_rules! unlock_and_send {
 
 /// TODOs:
 /// * Handle cases where peer closes connection to us.
-/// * Allow for started peices to expire and re-enter the pieces_not_done set again.
 /// * Ability to ask for more peer connections when connections close.
+/// (c) Allow for started peices to expire and re-enter the pieces_not_done set again.
 
 ///
 /// Messages
@@ -103,20 +103,6 @@ impl PeerPieceMap {
             HashSet::new()
         }
     }
-
-    // pub fn remove_piece(&mut self, peer_id: InternalPeerId, piece: u32) {
-    //     let ptb = self
-    //         .peers_to_pieces
-    //         .entry(Arc::clone(&peer_id))
-    //         .or_insert_with(|| HashSet::new());
-    //     let _ = ptb.remove(&piece);
-
-    //     let btp = self
-    //         .pieces_to_peers
-    //         .entry(piece)
-    //         .or_insert_with(|| HashSet::new());
-    //     let _ = btp.remove(&peer_id);
-    // }
 
     pub fn remove_peer(&mut self, peer_id: &InternalPeerId) {
         if let Some(blocks) = self.peers_to_pieces.remove(peer_id) {
@@ -699,7 +685,7 @@ impl TorrentProcessor {
                             .torrent_state
                             .set_peers_interested_in_us(Arc::clone(&peer_id), false),
                     };
-                    unlock_and_send!(wake_tx, state, { InternalStateMessage::Wakeup });
+                    unlock_and_send!(wake_tx, state, InternalStateMessage::Wakeup);
                 }
                 Messages::Have { piece_index } => {
                     let mut state = state.lock().await;
@@ -713,7 +699,7 @@ impl TorrentProcessor {
                             break;
                         }
                     }
-                    unlock_and_send!(wake_tx, state, { InternalStateMessage::Wakeup });
+                    unlock_and_send!(wake_tx, state, InternalStateMessage::Wakeup);
                 }
                 Messages::BitField { bitfield } => {
                     let mut state = state.lock().await;
@@ -737,7 +723,7 @@ impl TorrentProcessor {
                         }
                     }
 
-                    unlock_and_send!(wake_tx, state, { InternalStateMessage::Wakeup });
+                    unlock_and_send!(wake_tx, state, InternalStateMessage::Wakeup);
                 }
                 Messages::Request {
                     index,
@@ -803,7 +789,7 @@ impl TorrentProcessor {
                                 begin
                             );
                         }
-                        unlock_and_send!(wake_tx, state, { InternalStateMessage::Wakeup });
+                        unlock_and_send!(wake_tx, state, InternalStateMessage::Wakeup);
                     }
                 }
             }
