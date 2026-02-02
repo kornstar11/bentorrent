@@ -83,16 +83,21 @@ struct PieceToBlockKey {
     piece_id: u32,
     block_begin: u32,
 }
-
+// struct PieceToBlockMapEntry<'a> {
+//     entry: Entry<'a, u32, BlockDownload>
+// }
 #[derive(Debug, Default)]
 struct PieceToBlockMap {
-    inner: HashMap<u32, OutstandingBlockRequests>,
+    inprogress_requests: HashMap<u32, OutstandingBlockRequests>,
+    //completed_requests: HashMap<u32, OutstandingBlockRequests>,
 }
 
 impl PieceToBlockMap {
     fn requests_by_piece_id(&mut self, piece_id: u32) -> Option<&mut OutstandingBlockRequests> {
-        self.inner.get_mut(&piece_id)
+        self.inprogress_requests.get_mut(&piece_id)
     }
+
+    //fn request_entry(&mut self, piece_id: u32) -> 
 
     fn set_request_finished(&mut self, piece_id: u32, begin: u32) -> Option<()> {
         let requests = self
@@ -109,11 +114,11 @@ impl PieceToBlockMap {
     }
 
     fn remove_piece(&mut self, piece_id: u32) -> bool {
-        self.inner.remove(&piece_id).is_some()
+        self.inprogress_requests.remove(&piece_id).is_some()
     }
 
     fn requests(&self) -> impl Iterator<Item = BlockDownload> {
-        self.inner
+        self.inprogress_requests
             .iter()
             .flat_map(|(_, requests)| requests.iter().map(|(_, request)| request.clone()))
     }
@@ -126,7 +131,7 @@ impl PieceToBlockMap {
     }
 
     fn pieces(&self) -> impl Iterator<Item = u32> {
-        self.inner.iter().map(|(k, _)| *k)
+        self.inprogress_requests.iter().map(|(k, _)| *k)
     }
 
     fn insert_request(&mut self, piece_request: PeerRequestedPiece) {
@@ -135,24 +140,19 @@ impl PieceToBlockMap {
             is_completed: false,
         };
         let block_map = self
-            .inner
+            .inprogress_requests
             .entry(download.piece_request.index)
             .or_insert_with(|| BTreeMap::default());
         let _ = block_map.insert(download.piece_request.begin, download);
     }
-}
 
-impl Deref for PieceToBlockMap {
-    type Target = HashMap<u32, OutstandingBlockRequests>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl DerefMut for PieceToBlockMap {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+    fn get_request_entry<'a>(&'a mut self, piece_id: u32, begin: u32) -> Option<Entry<'a, u32, BlockDownload>> {
+        self
+            .inprogress_requests
+            .get_mut(&piece_id)
+            .map(|begin_map| {
+                begin_map.entry(begin)
+            })
     }
 }
 
@@ -212,25 +212,24 @@ impl InprogressPieceToBlockMap {
                 .checked_duration_since(entry_time)
                 .unwrap_or(Duration::ZERO);
             if lived_time >= ttl {
-                if let Some(expired) =
-                    self.piece_to_blocks_started
-                        .get_mut(&k.piece_id)
-                        .and_then(|begin_map| {
-                            // at this point we still need to decide if we should remove it, if it was is_completed == false (in progress) the drop it
-                            match begin_map.entry(k.block_begin) {
-                                Entry::Occupied(o) if !o.get().is_completed => {
-                                    // is expired
-                                    Some(o.remove())
-                                }
-                                _ => {
-                                    //if it was complete, leave it
-                                    None
-                                }
+                if let Some(expired) = self
+                    .piece_to_blocks_started
+                    .get_request_entry(k.piece_id, k.block_begin)
+                    .and_then(|entry| {
+                        match entry {
+                            Entry::Occupied(o) if !o.get().is_completed => {
+                                // is expired
+                                Some(o.remove())
                             }
-                        })
-                {
-                    acc.push(expired.piece_request);
-                }
+                            _ => {
+                                //if it was complete, leave it
+                                None
+                            }
+                        }
+
+                    }) {
+                        acc.push(expired.piece_request)
+                    }
             } else {
                 self.expirations.push_front(ele); // need to push it back
                 break;
