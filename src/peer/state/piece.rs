@@ -176,24 +176,6 @@ impl DerefMut for InprogressPieceToBlockMap {
 }
 
 impl InprogressPieceToBlockMap {
-    // fn inprogress_requests_by_piece_id(
-    //     &mut self,
-    //     piece_id: u32,
-    // ) -> Option<OutstandingBlockRequests> {
-    //     let inprogress_requests_by_piece_id = {
-    //         let requests_for_piece = self
-    //             .piece_to_blocks_started
-    //             .requests_by_piece_id(piece_id)?;
-    //         let filtered = requests_for_piece
-    //             .iter()
-    //             .map(|(k, v)| (*k, v.clone()))
-    //             .collect::<OutstandingBlockRequests>();
-
-    //         Some(filtered)
-    //     };
-    //     inprogress_requests_by_piece_id
-    // }
-
     fn insert(&mut self, started: Instant, piece_request: PeerRequestedPiece) {
         let k = PieceToBlockKey {
             piece_id: piece_request.index,
