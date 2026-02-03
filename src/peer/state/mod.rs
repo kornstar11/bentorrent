@@ -976,7 +976,6 @@ mod test {
         // Ensure haves are sent. Since pieces may originate from different pees, it makes sense to duplicate.
         let mut msgs = wait_rx(&mut msg_rx, Duration::from_secs(1), 2).await;
         // sort the messages by piece_id
-        println!("msgs: {:?}", msgs);
         msgs.sort_by(|a, b| {
             let a = match a {
                 Messages::Have { piece_index } => piece_index,

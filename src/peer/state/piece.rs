@@ -110,7 +110,10 @@ impl PieceToBlockMap {
     }
 
     fn remove_piece(&mut self, piece_id: u32) -> bool {
-        self.downloading.remove(&piece_id).is_some() || self.done.remove(&piece_id).is_some() || self.pieces_tracked.remove(&piece_id)
+        let download_del = self.downloading.remove(&piece_id).is_some();
+        let done_del = self.done.remove(&piece_id).is_some();
+        let tracked_del =  self.pieces_tracked.remove(&piece_id);
+        download_del || done_del || tracked_del
     }
 
     fn downloading_requests_len(&self) -> usize {
@@ -432,7 +435,6 @@ mod test {
 
         #[test]
         fn correctly_expires_incompleted_requests_by_expiring() {
-            // centralize boilerplate
             let (mut pbt, torrent, _) = setup_piece_block_tracker();
             let availiable_piece_to_peers = gen_availiable_piece_to_peers(&torrent);
 
