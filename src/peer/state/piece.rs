@@ -86,6 +86,7 @@ struct PieceToBlockKey {
 struct PieceToBlockMap {
     downloading: HashMap<u32, OutstandingBlockRequests>,
     done: HashMap<u32, OutstandingBlockRequests>,
+    pieces_tracked: HashSet<u32>,
 }
 
 impl PieceToBlockMap {
@@ -98,7 +99,7 @@ impl PieceToBlockMap {
             .downloading_requests_by_piece_id(piece_id)?;
         let download = requests.remove(&begin)?;
         let block_map = self.done.entry(piece_id).or_insert_with(|| BTreeMap::new());
-        let _ = block_map.insert(piece_id, download);
+        let _ = block_map.insert(begin, download);
         Some(())
     }
 
@@ -108,40 +109,34 @@ impl PieceToBlockMap {
             .is_some()
     }
 
-    fn remove_inprogress_piece(&mut self, piece_id: u32) -> bool {
-        self.downloading.remove(&piece_id).is_some() || self.done.remove(&piece_id).is_some()
+    fn remove_piece(&mut self, piece_id: u32) -> bool {
+        self.downloading.remove(&piece_id).is_some() || self.done.remove(&piece_id).is_some() || self.pieces_tracked.remove(&piece_id)
     }
 
-    // fn requests(&self) -> impl Iterator<Item = BlockDownload> {
-    //     self.downloading
-    //         .iter()
-    //         .flat_map(|(_, requests)| requests.iter().map(|(_, request)| request.clone()))
-    // }
-
     fn downloading_requests_len(&self) -> usize {
-        self.downloading.len()
-        // self
-        //     .requests()
-        //     .filter(|v| !v.is_completed)
-        //     .count()
+        self.downloading.values().map(|req| req.len()).sum()
     }
 
     fn pieces(&self) -> impl Iterator<Item = u32> {
         //TODO wrong
-        self.downloading.keys().map(|k| *k)
+        self.pieces_tracked.iter().map(|id| *id)
+        //self.downloading.keys().map(|k| *k)
         // let downloading_it = self.downloading.keys();
         // let done_it = self.done.keys();
     }
 
     fn insert_request(&mut self, piece_request: PeerRequestedPiece) {
+        let idx = piece_request.index;
         let download = BlockDownload {
             piece_request,
         };
         let block_map = self
             .downloading
-            .entry(download.piece_request.index)
+            .entry(idx)
             .or_insert_with(|| BTreeMap::default());
         let _ = block_map.insert(download.piece_request.begin, download);
+
+        let _ = self.pieces_tracked.insert(idx);
     }
 
     fn get_downloading_request_entry<'a>(&'a mut self, piece_id: u32, begin: u32) -> Option<Entry<'a, u32, BlockDownload>> {
@@ -153,11 +148,10 @@ impl PieceToBlockMap {
             })
     }
 
-    fn visit_req_map<>(map: &HashMap<u32, OutstandingBlockRequests>, piece_id: u32, begin: u32) -> Option<&BlockDownload> {
+    fn visit_req_map(map: &HashMap<u32, OutstandingBlockRequests>, piece_id: u32, begin: u32) -> Option<&BlockDownload> {
         map.get(&piece_id).and_then(|requests| {
             requests.get(&begin)
         })
-
     }
 
     fn contains_inprogress(&self, piece_id: u32, begin: u32) -> Option<&BlockDownload> {
@@ -294,7 +288,7 @@ impl PieceBlockTracker {
     }
 
     pub fn set_piece_finished(&mut self, piece_id: u32) {
-        let _ = self.piece_to_blocks_outstanding.remove_inprogress_piece(piece_id);
+        let _ = self.piece_to_blocks_outstanding.remove_piece(piece_id);
         let _ = self.pieces_completed.insert(piece_id);
     }
 
