@@ -919,7 +919,7 @@ mod test {
 
     #[tokio::test]
     async fn connection_handles_choke_events() {
-        env_logger::init();
+        let _ = env_logger::try_init();
         let (_, msg_tx, mut msg_rx) = setup_test().await;
         await_expected_initial_messages(&mut msg_rx).await;
 
