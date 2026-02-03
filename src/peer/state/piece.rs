@@ -26,10 +26,9 @@ impl PieceBlockAllocation {
         piece_id: u32,
         torrent: &V1Torrent,
         peer_ids: &HashSet<InternalPeerId>,
-        requested_requests: Option<&OutstandingBlockRequests>, // we don't want to re-request the same thing again and again, so filter on this
+        requested_requests: &InprogressPieceToBlockMap, // we don't want to re-request the same thing again and again, so filter on this
         request_capacity: &mut usize,
     ) -> Option<Self> {
-        let empty_outstanding_requests = BTreeMap::new(); // TODO gross, find another way
         if let Some(peer_id) = peer_ids.iter().next() {
             let mut requests_to_make = vec![];
             let allocation = TorrentAllocation::allocate_torrent(torrent);
@@ -42,12 +41,11 @@ impl PieceBlockAllocation {
             };
             for begin in (0..piece_size).step_by(PIECE_BLOCK_SIZE) {
                 if *request_capacity == 0 {
+                    log::trace!("Allocator is at capacity. piece_id={}", piece_id);
                     break;
                 }
-                let requested_requests =
-                    requested_requests.unwrap_or_else(|| &empty_outstanding_requests);
-                let already_requested = requested_requests.get(&(begin as u32)).is_some();
-                if already_requested {
+                if requested_requests.contains_inprogress(piece_id, begin as u32).is_some() {
+                    log::trace!("Allocator is skipping allocation for. piece_id={}, begin={}", piece_id, begin);
                     // skip based on the "begin" parameter and the piece_id, or no more request capacity is left.
                     continue;
                 }
@@ -83,21 +81,16 @@ struct PieceToBlockKey {
     piece_id: u32,
     block_begin: u32,
 }
-// struct PieceToBlockMapEntry<'a> {
-//     entry: Entry<'a, u32, BlockDownload>
-// }
+
 #[derive(Debug, Default)]
 struct PieceToBlockMap {
-    inprogress_requests: HashMap<u32, OutstandingBlockRequests>,
-    //completed_requests: HashMap<u32, OutstandingBlockRequests>,
+    inner: HashMap<u32, OutstandingBlockRequests>,
 }
 
 impl PieceToBlockMap {
     fn requests_by_piece_id(&mut self, piece_id: u32) -> Option<&mut OutstandingBlockRequests> {
-        self.inprogress_requests.get_mut(&piece_id)
+        self.inner.get_mut(&piece_id)
     }
-
-    //fn request_entry(&mut self, piece_id: u32) -> 
 
     fn set_request_finished(&mut self, piece_id: u32, begin: u32) -> Option<()> {
         let requests = self
@@ -114,11 +107,11 @@ impl PieceToBlockMap {
     }
 
     fn remove_piece(&mut self, piece_id: u32) -> bool {
-        self.inprogress_requests.remove(&piece_id).is_some()
+        self.inner.remove(&piece_id).is_some()
     }
 
     fn requests(&self) -> impl Iterator<Item = BlockDownload> {
-        self.inprogress_requests
+        self.inner
             .iter()
             .flat_map(|(_, requests)| requests.iter().map(|(_, request)| request.clone()))
     }
@@ -131,7 +124,7 @@ impl PieceToBlockMap {
     }
 
     fn pieces(&self) -> impl Iterator<Item = u32> {
-        self.inprogress_requests.iter().map(|(k, _)| *k)
+        self.inner.iter().map(|(k, _)| *k)
     }
 
     fn insert_request(&mut self, piece_request: PeerRequestedPiece) {
@@ -140,7 +133,7 @@ impl PieceToBlockMap {
             is_completed: false,
         };
         let block_map = self
-            .inprogress_requests
+            .inner
             .entry(download.piece_request.index)
             .or_insert_with(|| BTreeMap::default());
         let _ = block_map.insert(download.piece_request.begin, download);
@@ -148,11 +141,17 @@ impl PieceToBlockMap {
 
     fn get_request_entry<'a>(&'a mut self, piece_id: u32, begin: u32) -> Option<Entry<'a, u32, BlockDownload>> {
         self
-            .inprogress_requests
+            .inner
             .get_mut(&piece_id)
             .map(|begin_map| {
                 begin_map.entry(begin)
             })
+    }
+
+    fn contains_inprogress(&self, piece_id: u32, begin: u32) -> Option<&BlockDownload> {
+        self.inner.get(&piece_id).and_then(|requests| {
+            requests.get(&begin)
+        })
     }
 }
 
@@ -177,23 +176,23 @@ impl DerefMut for InprogressPieceToBlockMap {
 }
 
 impl InprogressPieceToBlockMap {
-    fn inprogress_requests_by_piece_id(
-        &mut self,
-        piece_id: u32,
-    ) -> Option<OutstandingBlockRequests> {
-        let inprogress_requests_by_piece_id = {
-            let requests_for_piece = self
-                .piece_to_blocks_started
-                .requests_by_piece_id(piece_id)?;
-            let filtered = requests_for_piece
-                .iter()
-                .map(|(k, v)| (*k, v.clone()))
-                .collect::<OutstandingBlockRequests>();
+    // fn inprogress_requests_by_piece_id(
+    //     &mut self,
+    //     piece_id: u32,
+    // ) -> Option<OutstandingBlockRequests> {
+    //     let inprogress_requests_by_piece_id = {
+    //         let requests_for_piece = self
+    //             .piece_to_blocks_started
+    //             .requests_by_piece_id(piece_id)?;
+    //         let filtered = requests_for_piece
+    //             .iter()
+    //             .map(|(k, v)| (*k, v.clone()))
+    //             .collect::<OutstandingBlockRequests>();
 
-            Some(filtered)
-        };
-        inprogress_requests_by_piece_id
-    }
+    //         Some(filtered)
+    //     };
+    //     inprogress_requests_by_piece_id
+    // }
 
     fn insert(&mut self, started: Instant, piece_request: PeerRequestedPiece) {
         let k = PieceToBlockKey {
@@ -325,15 +324,15 @@ impl PieceBlockTracker {
         // as it stands we dont plan any initial requests after this method is called, and because of this we become stalled.
         let inflight_requests = self.outstanding_requests_len();
         let mut capacity = self.max_outstanding_requests - inflight_requests;
-        let requested_requests = self
-            .piece_to_blocks_outstanding
-            .inprogress_requests_by_piece_id(piece_id);
+        // let requested_requests = self
+        //     .piece_to_blocks_outstanding
+        //     .inprogress_requests_by_piece_id(piece_id);
 
         let assignable_requests_opt = PieceBlockAllocation::new(
             piece_id,
             torrent,
             peer_ids,
-            requested_requests.as_ref(),
+            &self.piece_to_blocks_outstanding,
             &mut capacity,
         );
 
@@ -459,6 +458,7 @@ mod test {
 
         #[test]
         fn correctly_assigns_pieces_when_hitting_threshold() {
+            let _ = env_logger::try_init();
             // Test shows we do not track requests that are complete!
             let (mut pbt, torrent, requests_per_piece) = setup_piece_block_tracker();
             let availiable_piece_to_peers = gen_availiable_piece_to_peers(&torrent);
@@ -491,11 +491,12 @@ mod test {
             let torrent = torrent_fixture(vec![1; 20]);
             let peer_id: InternalPeerId = Arc::new(vec![2; 20]);
             let piece_id = 0;
+            let inprogress_map = InprogressPieceToBlockMap::default();
             let req = PieceBlockAllocation::new(
                 piece_id,
                 &torrent,
                 &vec![peer_id.clone()].into_iter().collect(),
-                None,
+                &inprogress_map,
                 &mut request_capacity,
             )
             .unwrap();
@@ -525,11 +526,12 @@ mod test {
             let torrent = torrent_fixture(vec![1; 20]);
             let peer_id: InternalPeerId = Arc::new(vec![2; 20]);
             let piece_id = 1;
+            let inprogress_map = InprogressPieceToBlockMap::default();
             let req = PieceBlockAllocation::new(
                 piece_id,
                 &torrent,
                 &vec![peer_id.clone()].into_iter().collect(),
-                None,
+                &inprogress_map,
                 &mut request_capacity,
             )
             .unwrap();
