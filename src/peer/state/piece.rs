@@ -73,7 +73,7 @@ impl PieceBlockAllocation {
 #[derive(Clone, Debug)]
 struct BlockDownload {
     piece_request: PeerRequestedPiece,
-    is_completed: bool,
+    //is_completed: bool,
 }
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, PartialOrd)]
@@ -84,73 +84,86 @@ struct PieceToBlockKey {
 
 #[derive(Debug, Default)]
 struct PieceToBlockMap {
-    inner: HashMap<u32, OutstandingBlockRequests>,
+    downloading: HashMap<u32, OutstandingBlockRequests>,
+    done: HashMap<u32, OutstandingBlockRequests>,
 }
 
 impl PieceToBlockMap {
-    fn requests_by_piece_id(&mut self, piece_id: u32) -> Option<&mut OutstandingBlockRequests> {
-        self.inner.get_mut(&piece_id)
+    fn downloading_requests_by_piece_id(&mut self, piece_id: u32) -> Option<&mut OutstandingBlockRequests> {
+        self.downloading.get_mut(&piece_id)
     }
 
     fn set_request_finished(&mut self, piece_id: u32, begin: u32) -> Option<()> {
         let requests = self
-            .requests_by_piece_id(piece_id)?;
-        let download = requests.get_mut(&begin)?;
-        download.is_completed = true;
+            .downloading_requests_by_piece_id(piece_id)?;
+        let download = requests.remove(&begin)?;
+        let block_map = self.done.entry(piece_id).or_insert_with(|| BTreeMap::new());
+        let _ = block_map.insert(piece_id, download);
         Some(())
     }
 
-    fn remove_request(&mut self, piece_id: u32, begin: u32) -> bool {
-        self.requests_by_piece_id(piece_id)
+    fn remove_downloading_request(&mut self, piece_id: u32, begin: u32) -> bool {
+        self.downloading_requests_by_piece_id(piece_id)
             .map(|reqs| reqs.remove(&begin))
             .is_some()
     }
 
-    fn remove_piece(&mut self, piece_id: u32) -> bool {
-        self.inner.remove(&piece_id).is_some()
+    fn remove_inprogress_piece(&mut self, piece_id: u32) -> bool {
+        self.downloading.remove(&piece_id).is_some() || self.done.remove(&piece_id).is_some()
     }
 
-    fn requests(&self) -> impl Iterator<Item = BlockDownload> {
-        self.inner
-            .iter()
-            .flat_map(|(_, requests)| requests.iter().map(|(_, request)| request.clone()))
-    }
+    // fn requests(&self) -> impl Iterator<Item = BlockDownload> {
+    //     self.downloading
+    //         .iter()
+    //         .flat_map(|(_, requests)| requests.iter().map(|(_, request)| request.clone()))
+    // }
 
-    fn outstanding_requests_len(&self) -> usize {
-        self
-            .requests()
-            .filter(|v| !v.is_completed)
-            .count()
+    fn downloading_requests_len(&self) -> usize {
+        self.downloading.len()
+        // self
+        //     .requests()
+        //     .filter(|v| !v.is_completed)
+        //     .count()
     }
 
     fn pieces(&self) -> impl Iterator<Item = u32> {
-        self.inner.iter().map(|(k, _)| *k)
+        //TODO wrong
+        self.downloading.keys().map(|k| *k)
+        // let downloading_it = self.downloading.keys();
+        // let done_it = self.done.keys();
     }
 
     fn insert_request(&mut self, piece_request: PeerRequestedPiece) {
         let download = BlockDownload {
             piece_request,
-            is_completed: false,
         };
         let block_map = self
-            .inner
+            .downloading
             .entry(download.piece_request.index)
             .or_insert_with(|| BTreeMap::default());
         let _ = block_map.insert(download.piece_request.begin, download);
     }
 
-    fn get_request_entry<'a>(&'a mut self, piece_id: u32, begin: u32) -> Option<Entry<'a, u32, BlockDownload>> {
+    fn get_downloading_request_entry<'a>(&'a mut self, piece_id: u32, begin: u32) -> Option<Entry<'a, u32, BlockDownload>> {
         self
-            .inner
+            .downloading
             .get_mut(&piece_id)
             .map(|begin_map| {
                 begin_map.entry(begin)
             })
     }
 
-    fn contains_inprogress(&self, piece_id: u32, begin: u32) -> Option<&BlockDownload> {
-        self.inner.get(&piece_id).and_then(|requests| {
+    fn visit_req_map<>(map: &HashMap<u32, OutstandingBlockRequests>, piece_id: u32, begin: u32) -> Option<&BlockDownload> {
+        map.get(&piece_id).and_then(|requests| {
             requests.get(&begin)
+        })
+
+    }
+
+    fn contains_inprogress(&self, piece_id: u32, begin: u32) -> Option<&BlockDownload> {
+        let downloading = Self::visit_req_map(&self.downloading, piece_id, begin);
+        downloading.or_else(move || {
+            Self::visit_req_map(&self.done, piece_id, begin)
         })
     }
 }
@@ -195,10 +208,10 @@ impl InprogressPieceToBlockMap {
             if lived_time >= ttl {
                 if let Some(expired) = self
                     .piece_to_blocks_started
-                    .get_request_entry(k.piece_id, k.block_begin)
+                    .get_downloading_request_entry(k.piece_id, k.block_begin)
                     .and_then(|entry| {
                         match entry {
-                            Entry::Occupied(o) if !o.get().is_completed => {
+                            Entry::Occupied(o) => {
                                 // is expired
                                 Some(o.remove())
                             }
@@ -262,8 +275,8 @@ impl PieceBlockTracker {
         self.pieces_completed.len()
     }
 
-    pub fn outstanding_requests_len(&self) -> usize {
-        self.piece_to_blocks_outstanding.outstanding_requests_len()
+    pub fn downloading_requests_len(&self) -> usize {
+        self.piece_to_blocks_outstanding.downloading_requests_len()
     }
 
     pub fn outstanding_pieces_len(&self) -> usize {
@@ -273,7 +286,7 @@ impl PieceBlockTracker {
     // TODO: function to remove requests that may have been dropped, due to conntection drop out or something else.
     pub fn remove_request(&mut self, req: PeerRequestedPiece) -> bool {
         self.piece_to_blocks_outstanding
-            .remove_request(req.index, req.begin)
+            .remove_downloading_request(req.index, req.begin)
     }
 
     pub fn set_request_finished(&mut self, piece_id: u32, begin: u32) -> Option<()> {
@@ -281,7 +294,7 @@ impl PieceBlockTracker {
     }
 
     pub fn set_piece_finished(&mut self, piece_id: u32) {
-        let _ = self.piece_to_blocks_outstanding.remove_piece(piece_id);
+        let _ = self.piece_to_blocks_outstanding.remove_inprogress_piece(piece_id);
         let _ = self.pieces_completed.insert(piece_id);
     }
 
@@ -304,7 +317,7 @@ impl PieceBlockTracker {
         let now = Instant::now();
         // currently this method is a bit flawed, we may need to resume piece tracking externally since the peer lists may change over time
         // as it stands we dont plan any initial requests after this method is called, and because of this we become stalled.
-        let inflight_requests = self.outstanding_requests_len();
+        let inflight_requests = self.downloading_requests_len();
         let mut capacity = self.max_outstanding_requests - inflight_requests;
         // let requested_requests = self
         //     .piece_to_blocks_outstanding
@@ -400,7 +413,7 @@ mod test {
             assert!(!assignments.is_empty());
             // Expect max allowed requests to be dispatched.
             // a piece may be larger than our max block size, so we may need more than one request to get one piece.
-            assert_eq!(pbt.outstanding_requests_len(), 2);
+            assert_eq!(pbt.downloading_requests_len(), 2);
             assert_eq!(pbt.outstanding_pieces_len(), 1);
             assert_eq!(pbt.pieces_not_started.len(), 1);
         }

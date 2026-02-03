@@ -371,7 +371,7 @@ impl TorrentProcessor {
                     let percent_completed = ((pieces_completed as f64) / (locked_state.torrent.info.pieces.len() as f64)) * 100.0;
                     log::info!("Timer stats: pieces_not_started={}, outstanding_requests={}, outstanding_pieces={} pieces_finished={}, percent_finished={}",
                         locked_state.torrent_state.piece_block_tracking.pieces_not_started().len(),
-                        locked_state.torrent_state.piece_block_tracking.outstanding_requests_len(),
+                        locked_state.torrent_state.piece_block_tracking.downloading_requests_len(),
                         locked_state.torrent_state.piece_block_tracking.outstanding_pieces_len(),
                         pieces_completed,
                         percent_completed
