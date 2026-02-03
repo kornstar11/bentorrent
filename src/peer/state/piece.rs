@@ -109,11 +109,10 @@ impl PieceToBlockMap {
             .is_some()
     }
 
-    fn remove_piece(&mut self, piece_id: u32) -> bool {
-        let download_del = self.downloading.remove(&piece_id).is_some();
-        let done_del = self.done.remove(&piece_id).is_some();
-        let tracked_del =  self.pieces_tracked.remove(&piece_id);
-        download_del || done_del || tracked_del
+    fn remove_piece(&mut self, piece_id: u32) {
+        let _ = self.downloading.remove(&piece_id).is_some();
+        let _ = self.done.remove(&piece_id).is_some();
+        let _ = self.pieces_tracked.remove(&piece_id);
     }
 
     fn downloading_requests_len(&self) -> usize {
@@ -291,7 +290,7 @@ impl PieceBlockTracker {
     }
 
     pub fn set_piece_finished(&mut self, piece_id: u32) {
-        let _ = self.piece_to_blocks_outstanding.remove_piece(piece_id);
+        self.piece_to_blocks_outstanding.remove_piece(piece_id);
         let _ = self.pieces_completed.insert(piece_id);
     }
 
