@@ -764,6 +764,7 @@ impl TorrentProcessor {
                     begin,
                     block,
                 } => {
+                    let block_len = block.len();
                     let finished = io.write(index, begin, block).await?;
                     let mut state = state.lock().await;
                     if finished {
@@ -777,7 +778,7 @@ impl TorrentProcessor {
                             InternalStateMessage::PieceComplete { piece_id: index }
                         });
                     } else {
-                        log::debug!("Request done! piece={}, begin={}", index, begin);
+                        log::debug!("Request done! piece={}, begin={}, len={}", index, begin, block_len);
                         if let None = state
                             .torrent_state
                             .piece_block_tracking
@@ -975,10 +976,11 @@ mod test {
         // Ensure haves are sent. Since pieces may originate from different pees, it makes sense to duplicate.
         let mut msgs = wait_rx(&mut msg_rx, Duration::from_secs(1), 2).await;
         // sort the messages by piece_id
+        println!("msgs: {:?}", msgs);
         msgs.sort_by(|a, b| {
             let a = match a {
                 Messages::Have { piece_index } => piece_index,
-                _ => panic!("Bad message"),
+                e => panic!("Bad message: {:?}", e),
             };
             let b = match b {
                 Messages::Have { piece_index } => piece_index,
