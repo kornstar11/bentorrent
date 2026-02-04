@@ -86,7 +86,7 @@ struct PieceToBlockKey {
 struct PieceToBlockMap {
     downloading: HashMap<u32, OutstandingBlockRequests>,
     done: HashMap<u32, OutstandingBlockRequests>,
-    pieces_tracked: HashSet<u32>,
+    //pieces_tracked: HashSet<u32>,
 }
 
 impl PieceToBlockMap {
@@ -112,19 +112,20 @@ impl PieceToBlockMap {
     fn remove_piece(&mut self, piece_id: u32) {
         let _ = self.downloading.remove(&piece_id).is_some();
         let _ = self.done.remove(&piece_id).is_some();
-        let _ = self.pieces_tracked.remove(&piece_id);
+        //let _ = self.pieces_tracked.remove(&piece_id);
     }
 
     fn downloading_requests_len(&self) -> usize {
         self.downloading.values().map(|req| req.len()).sum()
     }
 
-    fn pieces(&self) -> impl Iterator<Item = u32> {
+    fn pieces(&self) -> HashSet<u32> {
         //TODO wrong
-        self.pieces_tracked.iter().map(|id| *id)
+        //self.pieces_tracked.iter().map(|id| *id)
         //self.downloading.keys().map(|k| *k)
-        // let downloading_it = self.downloading.keys();
-        // let done_it = self.done.keys();
+        let downloading_it = self.downloading.keys();
+        let done_it = self.done.keys();
+        downloading_it.chain(done_it).map(|id| {*id}).collect()
     }
 
     fn insert_request(&mut self, piece_request: PeerRequestedPiece) {
@@ -138,7 +139,7 @@ impl PieceToBlockMap {
             .or_insert_with(|| BTreeMap::default());
         let _ = block_map.insert(download.piece_request.begin, download);
 
-        let _ = self.pieces_tracked.insert(idx);
+        //let _ = self.pieces_tracked.insert(idx);
     }
 
     fn get_downloading_request_entry<'a>(&'a mut self, piece_id: u32, begin: u32) -> Option<Entry<'a, u32, BlockDownload>> {
@@ -255,7 +256,7 @@ impl PieceBlockTracker {
     pub fn get_incomplete_pieces(&self) -> impl Iterator<Item = u32> {
         let not_started_pieces = self.pieces_not_started.iter().map(|id| *id);
         self.piece_to_blocks_outstanding
-            .pieces()
+            .pieces().into_iter()
             .chain(not_started_pieces)
     }
 
@@ -276,7 +277,7 @@ impl PieceBlockTracker {
     }
 
     pub fn outstanding_pieces_len(&self) -> usize {
-        self.piece_to_blocks_outstanding.pieces().count()
+        self.piece_to_blocks_outstanding.pieces().len()
     }
 
     // TODO: function to remove requests that may have been dropped, due to conntection drop out or something else.

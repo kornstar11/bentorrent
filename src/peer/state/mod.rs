@@ -378,6 +378,7 @@ impl TorrentProcessor {
                     );
 
                     if !expired.is_empty() { // TODO handle expired requests
+                        // TODO Queue cancel message for this peer
                         log::warn!("Expired requests: {}", expired.len());
                         unlock_and_send!(wake_up_tx, locked_state, {
                             InternalStateMessage::Wakeup
