@@ -45,9 +45,11 @@ pub async fn inner_handle_peer_msgs(
             }
             Messages::Have { piece_index } => {
                 let mut state = state.lock().await;
-                let interest_change = state
-                    .torrent_state
-                    .add_pieces_for_peer(Arc::clone(&peer_id), vec![piece_index]);
+                let interest_change = {
+                    state
+                        .torrent_state
+                        .add_pieces_for_peer(Arc::clone(&peer_id), vec![piece_index])
+                };
                 if let Some(interest) = interest_change {
                     let msg = FlagMessages::interest_msg(interest);
                     log::debug!("Signal interest..");
@@ -55,21 +57,23 @@ pub async fn inner_handle_peer_msgs(
                         break;
                     }
                 }
-                unlock_and_send!(wake_tx, state, InternalStateMessage::Wakeup);
+                wake_tx.send(InternalStateMessage::Wakeup).await?;
             }
             Messages::BitField { bitfield } => {
-                let mut state = state.lock().await;
-                let bitfield: BitFieldReaderIter = BitFieldReader::from(bitfield).into();
-                let pieces_present = bitfield
-                    .into_iter()
-                    .enumerate()
-                    .filter(|(_, was_set)| *was_set)
-                    .map(|(block, _)| block as u32)
-                    .collect::<Vec<_>>();
+                let interest_change = {
+                    let mut state = state.lock().await;
+                    let bitfield: BitFieldReaderIter = BitFieldReader::from(bitfield).into();
+                    let pieces_present = bitfield
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(_, was_set)| *was_set)
+                        .map(|(block, _)| block as u32)
+                        .collect::<Vec<_>>();
 
-                let interest_change = state
-                    .torrent_state
-                    .add_pieces_for_peer(Arc::clone(&peer_id), pieces_present);
+                    state
+                        .torrent_state
+                        .add_pieces_for_peer(Arc::clone(&peer_id), pieces_present)
+                };
 
                 if let Some(interest) = interest_change {
                     let msg = FlagMessages::interest_msg(interest);
@@ -78,8 +82,7 @@ pub async fn inner_handle_peer_msgs(
                         break;
                     }
                 }
-
-                unlock_and_send!(wake_tx, state, InternalStateMessage::Wakeup);
+                wake_tx.send(InternalStateMessage::Wakeup).await?;
             }
             Messages::Request {
                 index,
