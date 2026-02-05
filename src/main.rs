@@ -1,17 +1,25 @@
-use std::fs::read;
-
+use std::{fs::read, path::PathBuf};
+use clap::Parser;
 use bentorrent::{config::Config, model::V1Torrent, peer::start_processing};
+
+#[derive(Debug, Parser)]
+#[command(about="Silly Bittorrent peer. Don't expect too much!")]
+struct Cli {
+    #[arg(short = 'f')]
+    torrent_location: PathBuf,
+    #[command(flatten)]
+    config: Config
+}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     env_logger::init();
-    //let torrent = read("./test_data/ubuntu-25.10-desktop-amd64.iso.torrent").unwrap();
-    let torrent = read("./test_data/debian-13.2.0-amd64-netinst.iso.torrent").unwrap();
-    let config = Config::new();
+    let cli = Cli::parse();
+    let torrent = read(cli.torrent_location).unwrap();
     match bentorrent::file::parse_bencode(&torrent) {
         Ok(parsed) => {
             let torrent = V1Torrent::try_from(parsed).unwrap();
-            if let Err(e) = start_processing(torrent, config).await {
+            if let Err(e) = start_processing(torrent, cli.config).await {
                 log::error!("Processor error: {:?}", e);
             }
             log::info!("Done!");
