@@ -852,7 +852,7 @@ mod test {
     }
 
     async fn setup_test() -> (JoinHandle<Result<()>>, Sender<Messages>, Receiver<Messages>) {
-        let mut config = Config::new();
+        let mut config = Config::default();
         config.max_outstanding_requests = 1024;
         let torrent = torrent_fixture(vec![1 as u8, 20]);
         let io = Box::new(MemoryTorrentIO::new(torrent.clone()).await);
