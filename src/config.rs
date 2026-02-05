@@ -21,6 +21,9 @@ pub struct Config {
     #[arg(default_value_t = 128)]
     #[arg(long)]
     pub max_outstanding_requests: usize,
+    #[arg(default_value_t = 4)]
+    #[arg(long)]
+    pub max_deque_responses: usize,
 }
 
 impl Default for Config {
@@ -32,6 +35,7 @@ impl Default for Config {
             peer_rx_size: 128,
             file_handler_channel_size: 2,
             max_outstanding_requests: 128,
+            max_deque_responses: 4,
         }
     }
 }

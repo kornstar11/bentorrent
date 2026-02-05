@@ -125,6 +125,7 @@ struct InternalPeerState {
 #[derive(Debug, Default)]
 struct TorrentState {
     piece_block_tracking: PieceBlockTracker,
+    config: Config,
     // Defaults below
     peers_interested: HashSet<InternalPeerId>, // they are interested in us
     peers_not_choking: HashSet<InternalPeerId>, // they are choking us
@@ -134,10 +135,11 @@ struct TorrentState {
 }
 
 impl TorrentState {
-    pub fn new(pieces: &Vec<V1Piece>, max_outstanding_requests: usize) -> Self {
-        let piece_block_tracking = PieceBlockTracker::new(max_outstanding_requests, pieces);
+    pub fn new(pieces: &Vec<V1Piece>, config: Config) -> Self {
+        let piece_block_tracking = PieceBlockTracker::new(config.max_outstanding_requests, pieces);
         Self {
             piece_block_tracking,
+            config,
             ..Default::default()
         }
     }
@@ -292,7 +294,7 @@ pub struct TorrentProcessor {
 impl TorrentProcessor {
     pub fn new(config: Config, our_id: InternalPeerId, torrent: V1Torrent, io: IoHandler) -> Self {
         let torrent_state =
-            TorrentState::new(&torrent.info.pieces, config.max_outstanding_requests);
+            TorrentState::new(&torrent.info.pieces, config);
         Self {
             our_id,
             torrent,
@@ -491,9 +493,9 @@ impl TorrentProcessor {
         peer_to_tx: &mut PeerToSender,
         io: IoHandler,
     ) -> Result<()> {
-        let dequed = {
-            let to_deq = 4; // TODO this should be configable
+        let dequed = { // we do this inside a block to allow the lock to close once we deque the requests.
             let mut locked_state = state.lock().await;
+            let to_deq = locked_state.torrent_state.config.max_deque_responses;
             let mut deque = vec![];
             let mut dequed_cnt = 0;
             while let Some(dq) = locked_state
@@ -571,8 +573,6 @@ impl TorrentProcessor {
         peer_to_tx: &mut PeerToSender,
     ) {
         let mut locked_state = state.lock().await;
-        //log::debug!("Computing peer requests {:?}", locked_state.torrent_state);
-
         // this function forgets that pieces need to be broken into blocks, so no real block tracking is done...
 
         let torrent = locked_state.torrent.clone();
