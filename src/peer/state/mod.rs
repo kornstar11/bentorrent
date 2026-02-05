@@ -332,6 +332,7 @@ impl TorrentProcessor {
                         log::info!("initial messages sent to {}", hex::encode(&handshake.peer_ctx.peer_id));
                         let _ = peer_to_tx.insert(Arc::new(handshake.peer_ctx.peer_id.clone()), tx.clone());
                         handle_peer_requests_fq.push(Self::handle_peer_msgs(Arc::clone(&state), io.clone(), rx, handshake, tx, wake_up_tx.clone()));
+                        // todo each peer needs a keep-alive timer for times of inactivity
                     } else {
                         log::warn!("Unable to initialize connection {:?}", handshake);
                     }
