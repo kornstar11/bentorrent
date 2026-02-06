@@ -1,0 +1,190 @@
+use std::{sync::Arc, time::Duration};
+use anyhow::Result;
+use tokio::{sync::{Mutex, mpsc::{Receiver, Sender}}, time::sleep};
+
+use crate::{model::{InternalPeerId, PeerRequestedPiece}, peer::{bitfield::{BitFieldReader, BitFieldReaderIter}, protocol::{FlagMessages, Messages}, state::{InnerTorrentState, InternalStateMessage, InternalTorrentWriter}}};
+use crate::unlock_and_send;
+
+pub struct PeerConnectionParams {
+    pub peer_id: InternalPeerId,
+    pub state: Arc<Mutex<InnerTorrentState>>,
+    pub io: InternalTorrentWriter,
+    pub rx: Receiver<Messages>,
+    pub tx: Sender<Messages>,
+    pub wake_tx: Sender<InternalStateMessage>,
+}
+
+pub async fn run_peer_connection(params: PeerConnectionParams) -> Result<()> {
+    let tx = params.tx.clone();
+    let peer_handling_task = tokio::spawn(inner_handle_peer_msgs(params));
+    keep_alive_task(tx).await;
+    peer_handling_task.await?
+}
+
+async fn keep_alive_task(tx: Sender<Messages>) {
+    while let Ok(_) = tx.send(Messages::KeepAlive).await {
+        log::trace!("Keep-alive sent...");
+        let _ = sleep(Duration::from_secs(1)).await;
+    }
+}
+///
+/// Handle all incoming state updates from a single peer, and requests
+async fn inner_handle_peer_msgs(
+    params: PeerConnectionParams
+) -> Result<()> {
+    let PeerConnectionParams{
+        peer_id,
+        state,
+        io,
+        mut rx,
+        tx,
+        wake_tx
+    } = params;
+    let hex_peer_id = hex::encode(peer_id.as_ref());
+    log::info!("Starting torrent processing for peer={}", hex_peer_id);
+
+    while let Some(msg) = rx.recv().await {
+        let peer_id = Arc::clone(&peer_id);
+
+        //log::debug!("Message: peer_id={}, msg={:?}", hex::encode(peer_id.as_ref()), msg);
+        match msg {
+            Messages::KeepAlive => {
+                // TODO reset timer or something, and expire after xx time
+            }
+            Messages::Flag(flag) => {
+                let mut state = state.lock().await;
+                match flag {
+                    FlagMessages::Choke => state
+                        .torrent_state
+                        .set_peer_choked_us(Arc::clone(&peer_id), true),
+                    FlagMessages::Unchoke => state
+                        .torrent_state
+                        .set_peer_choked_us(Arc::clone(&peer_id), false),
+                    FlagMessages::Interested => state
+                        .torrent_state
+                        .set_peers_interested_in_us(Arc::clone(&peer_id), true),
+                    FlagMessages::NotInterested => state
+                        .torrent_state
+                        .set_peers_interested_in_us(Arc::clone(&peer_id), false),
+                };
+                unlock_and_send!(wake_tx, state, InternalStateMessage::Wakeup);
+            }
+            Messages::Have { piece_index } => {
+                let mut state = state.lock().await;
+                let interest_change = {
+                    state
+                        .torrent_state
+                        .add_pieces_for_peer(Arc::clone(&peer_id), vec![piece_index])
+                };
+                if let Some(interest) = interest_change {
+                    let msg = FlagMessages::interest_msg(interest);
+                    log::debug!("Signal interest..");
+                    if let Err(_) = tx.send(msg).await {
+                        break;
+                    }
+                }
+                wake_tx.send(InternalStateMessage::Wakeup).await?;
+            }
+            Messages::BitField { bitfield } => {
+                let interest_change = {
+                    let mut state = state.lock().await;
+                    let bitfield: BitFieldReaderIter = BitFieldReader::from(bitfield).into();
+                    let pieces_present = bitfield
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(_, was_set)| *was_set)
+                        .map(|(block, _)| block as u32)
+                        .collect::<Vec<_>>();
+
+                    state
+                        .torrent_state
+                        .add_pieces_for_peer(Arc::clone(&peer_id), pieces_present)
+                };
+
+                if let Some(interest) = interest_change {
+                    let msg = FlagMessages::interest_msg(interest);
+                    if let Err(e) = tx.send(msg).await {
+                        log::info!("Closing... {:?}", e);
+                        break;
+                    }
+                }
+                wake_tx.send(InternalStateMessage::Wakeup).await?;
+            }
+            Messages::Request {
+                index,
+                begin,
+                length,
+            } => {
+                let state = state.lock().await;
+                let choked = state
+                    .torrent_state
+                    .get_internal_peer_state(&peer_id)
+                    .map(|peer_state| peer_state.choked)
+                    .unwrap_or(true);
+                log::debug!("Have request for {}", index);
+                if choked {
+                    log::debug!(
+                        "Request is being ignored because it is choked [peer_id={} ",
+                        hex_peer_id.as_str()
+                    );
+                    continue;
+                }
+
+                unlock_and_send!(wake_tx, state, {
+                    InternalStateMessage::PeerRequestedPiece(PeerRequestedPiece {
+                        peer_id,
+                        index,
+                        begin,
+                        length,
+                    })
+                });
+            }
+            Messages::Cancel {
+                index: _,
+                begin: _,
+                length: _,
+            } => {} // TODO: ignoring for now
+            Messages::Piece {
+                index,
+                begin,
+                block,
+            } => {
+                let block_len = block.len();
+                let finished = io.write(index, begin, block).await?;
+                let mut state = state.lock().await;
+                if finished {
+                    log::debug!("Piece done! piece={}", index);
+                    state
+                        .torrent_state
+                        .piece_block_tracking
+                        .set_piece_finished(index);
+
+                    unlock_and_send!(wake_tx, state, {
+                        InternalStateMessage::PieceComplete { piece_id: index }
+                    });
+                } else {
+                    log::debug!("Request done! piece={}, begin={}, len={}", index, begin, block_len);
+                    if let None = state
+                        .torrent_state
+                        .piece_block_tracking
+                        .set_request_finished(index, begin)
+                    {
+                        log::warn!(
+                            "Request not found when setting finished: piece={}, begin={}",
+                            index,
+                            begin
+                        );
+                    }
+                    unlock_and_send!(wake_tx, state, InternalStateMessage::Wakeup);
+                }
+            }
+        }
+    }
+
+    log::info!(
+        "Peer state processing stopped. peer_id={}",
+        hex_peer_id.as_str()
+    );
+
+    Ok(())
+}
