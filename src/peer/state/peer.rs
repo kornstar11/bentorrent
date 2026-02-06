@@ -23,7 +23,7 @@ pub async fn run_peer_connection(params: PeerConnectionParams) -> Result<()> {
 
 async fn keep_alive_task(tx: Sender<Messages>) {
     while let Ok(_) = tx.send(Messages::KeepAlive).await {
-        log::debug!("Keep-alive sent...");
+        log::trace!("Keep-alive sent...");
         let _ = sleep(Duration::from_secs(1)).await;
     }
 }
@@ -40,7 +40,8 @@ async fn inner_handle_peer_msgs(
         tx,
         wake_tx
     } = params;
-    log::info!("Starting torrent processing...");
+    let hex_peer_id = hex::encode(peer_id.as_ref());
+    log::info!("Starting torrent processing for peer={}", hex_peer_id);
 
     while let Some(msg) = rx.recv().await {
         let peer_id = Arc::clone(&peer_id);
@@ -124,7 +125,7 @@ async fn inner_handle_peer_msgs(
                 if choked {
                     log::debug!(
                         "Request is being ignored because it is choked [peer_id={} ",
-                        hex::encode(peer_id.as_ref())
+                        hex_peer_id.as_str()
                     );
                     continue;
                 }
@@ -182,7 +183,7 @@ async fn inner_handle_peer_msgs(
 
     log::info!(
         "Peer state processing stopped. peer_id={}",
-        hex::encode(peer_id.as_ref())
+        hex_peer_id.as_str()
     );
 
     Ok(())
