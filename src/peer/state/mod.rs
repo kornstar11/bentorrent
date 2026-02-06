@@ -7,7 +7,7 @@ use crate::model::{PeerRequestedPiece, V1Piece, V1Torrent};
 use crate::peer::bitfield::BitFieldWriter;
 use crate::peer::io::IoHandler;
 use crate::peer::protocol::{FlagMessages, Handshake};
-use crate::peer::state::peer::inner_handle_peer_msgs;
+use crate::peer::state::peer::{PeerConnectionParams, run_peer_connection};
 use crate::peer::state::piece::PieceBlockTracker;
 use crate::unlock_and_send;
 use anyhow::Result;
@@ -24,8 +24,8 @@ use super::protocol::Messages;
 
 type PeerToSender = HashMap<InternalPeerId, Sender<Messages>>;
 
-// Unlocking before the next async boundry is important, so this aims to make any channel send coupled with a drop.
 mod macros {
+    // Unlocking before the next async boundry is important, so this aims to make any channel send coupled with a drop.
     #[macro_export]
     macro_rules! unlock_and_send {
         ($tx:ident, $locked:ident, $send_this: expr) => {
@@ -654,7 +654,14 @@ impl TorrentProcessor {
     ) -> (InternalPeerId, Result<()>) {
         let peer_id = Arc::new(handshake.peer_ctx.peer_id.clone());
         let res =
-            inner_handle_peer_msgs(Arc::clone(&peer_id), state, io, rx, tx, wake_tx).await;
+            run_peer_connection(PeerConnectionParams {
+                peer_id: Arc::clone(&peer_id), 
+                state, 
+                io, 
+                rx, 
+                tx, 
+                wake_tx
+            }).await;
         (peer_id, res)
     }
 }

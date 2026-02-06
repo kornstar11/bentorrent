@@ -1,20 +1,45 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use anyhow::Result;
-use tokio::sync::{Mutex, mpsc::{Receiver, Sender}};
+use tokio::{sync::{Mutex, mpsc::{Receiver, Sender}}, time::sleep};
 
 use crate::{model::{InternalPeerId, PeerRequestedPiece}, peer::{bitfield::{BitFieldReader, BitFieldReaderIter}, protocol::{FlagMessages, Messages}, state::{InnerTorrentState, InternalStateMessage, InternalTorrentWriter}}};
 use crate::unlock_and_send;
 
+pub struct PeerConnectionParams {
+    pub peer_id: InternalPeerId,
+    pub state: Arc<Mutex<InnerTorrentState>>,
+    pub io: InternalTorrentWriter,
+    pub rx: Receiver<Messages>,
+    pub tx: Sender<Messages>,
+    pub wake_tx: Sender<InternalStateMessage>,
+}
+
+pub async fn run_peer_connection(params: PeerConnectionParams) -> Result<()> {
+    let tx = params.tx.clone();
+    let peer_handling_task = tokio::spawn(inner_handle_peer_msgs(params));
+    keep_alive_task(tx).await;
+    peer_handling_task.await?
+}
+
+async fn keep_alive_task(tx: Sender<Messages>) {
+    while let Ok(_) = tx.send(Messages::KeepAlive).await {
+        log::debug!("Keep-alive sent...");
+        let _ = sleep(Duration::from_secs(1)).await;
+    }
+}
 ///
 /// Handle all incoming state updates from a single peer, and requests
-pub async fn inner_handle_peer_msgs(
-    peer_id: InternalPeerId,
-    state: Arc<Mutex<InnerTorrentState>>,
-    io: InternalTorrentWriter,
-    mut rx: Receiver<Messages>,
-    tx: Sender<Messages>,
-    wake_tx: Sender<InternalStateMessage>,
+async fn inner_handle_peer_msgs(
+    params: PeerConnectionParams
 ) -> Result<()> {
+    let PeerConnectionParams{
+        peer_id,
+        state,
+        io,
+        mut rx,
+        tx,
+        wake_tx
+    } = params;
     log::info!("Starting torrent processing...");
 
     while let Some(msg) = rx.recv().await {
