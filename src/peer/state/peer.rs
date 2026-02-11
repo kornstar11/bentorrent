@@ -24,7 +24,7 @@ pub async fn run_peer_connection(params: PeerConnectionParams) -> Result<()> {
 async fn keep_alive_task(tx: Sender<Messages>) {
     while let Ok(_) = tx.send(Messages::KeepAlive).await {
         log::trace!("Keep-alive sent...");
-        let _ = sleep(Duration::from_secs(1)).await;
+        let _ = sleep(Duration::from_secs(1)).await; // todo config
     }
 }
 ///

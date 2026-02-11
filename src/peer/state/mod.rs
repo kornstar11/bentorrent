@@ -338,10 +338,10 @@ impl TorrentProcessor {
                     log::info!("Accepting peer {}", hex::encode(&handshake.peer_ctx.peer_id));
                     // send peer back state needed, pieces we have and the choke, interested
                     if let Ok(_) = Self::init_connection(Arc::clone(&state), &mut tx).await {
+                        // dispatch the peer connection handling task...
                         log::info!("initial messages sent to {}", hex::encode(&handshake.peer_ctx.peer_id));
                         let _ = peer_to_tx.insert(Arc::new(handshake.peer_ctx.peer_id.clone()), tx.clone());
                         handle_peer_requests_fq.push(Self::handle_peer_msgs(Arc::clone(&state), io.clone(), rx, handshake, tx, wake_up_tx.clone()));
-                        // todo each peer needs a keep-alive timer for times of inactivity
                     } else {
                         log::warn!("Unable to initialize connection {:?}", handshake);
                     }
@@ -591,22 +591,21 @@ impl TorrentProcessor {
             .piece_block_tracking
             .generate_assignments(&torrent, &peer_to_pieces_availaible);
 
-        // PieceBlockAllocation
         for request in requests.into_iter() {
             log::trace!("Dispatch request for piece_id {}", request.index);
+            // To prevent a deadlock, we ensure we can send, and don't wait here.
             if let Some(tx) = peer_to_tx.get(&request.peer_id) {
-                if let Ok(_) = tx
-                    .send(Messages::Request {
+                if let Ok(permit) = tx.try_reserve() {
+                    permit.send(Messages::Request { 
                         index: request.index,
                         begin: request.begin,
                         length: request.length,
-                    })
-                    .await
-                {
+                    });
                     continue;
                 }
             }
-            log::warn!("Unable to dispatch {:?}", request);
+            log::warn!("Unable to dispatch request... will requeue {:?}", request);
+
             if !locked_state
                 .torrent_state
                 .piece_block_tracking
