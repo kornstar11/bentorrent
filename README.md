@@ -1,5 +1,5 @@
 # Bentorrent
-
+This is a project to attempt to understand and develop a Bittorrent peer, it is not meant to be a real fully featured peer.
 ## Sources:
 * https://wiki.theory.org/BitTorrentSpecification#Tracker_HTTP.2FHTTPS_Protocol
 * https://www.bittorrent.org/beps/bep_0003.html
