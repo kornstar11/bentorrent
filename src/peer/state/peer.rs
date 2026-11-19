@@ -17,8 +17,14 @@ pub struct PeerConnectionParams {
 pub async fn run_peer_connection(params: PeerConnectionParams) -> Result<()> {
     let tx = params.tx.clone();
     let peer_handling_task = tokio::spawn(inner_handle_peer_msgs(params));
-    keep_alive_task(tx).await;
-    peer_handling_task.await?
+    tokio::select! {
+        _ = keep_alive_task(tx) => {
+            Ok(())
+        },
+        peer_handling_res = peer_handling_task => {
+            peer_handling_res?
+        }
+    }
 }
 
 async fn keep_alive_task(tx: Sender<Messages>) {
@@ -70,8 +76,8 @@ async fn inner_handle_peer_msgs(
                 unlock_and_send!(wake_tx, state, InternalStateMessage::Wakeup);
             }
             Messages::Have { piece_index } => {
-                let mut state = state.lock().await;
                 let interest_change = {
+                    let mut state = state.lock().await;
                     state
                         .torrent_state
                         .add_pieces_for_peer(Arc::clone(&peer_id), vec![piece_index])
